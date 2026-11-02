@@ -361,11 +361,10 @@ const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
 
 const MAIN_KEYBOARD = {
   keyboard: [
-    [{ text: '🛍️ Shop', style: 'success' }, { text: '🎮 Game List', style: 'primary' }],
-    [{ text: '📋 Available Games' }, { text: '🛒 Buy Account' }],
-    [{ text: '💼 My Wallet', style: 'primary' }, { text: '📦 My Orders' }],
-    [{ text: '👤 My Account' }, { text: '💬 Help Center' }],
-    [{ text: '🌐 Language' }, { text: '📱 Official Mini App' }],
+    [{ text: '🎮 Game List', style: 'success' }, { text: '💼 My Wallet', style: 'primary' }],
+    [{ text: '📦 My Orders' }, { text: '👤 My Account' }],
+    [{ text: '💬 Help Center' }, { text: '🌐 Language' }],
+    [{ text: '📱 Official Mini App' }],
   ],
   resize_keyboard: true,
   is_persistent: true,
@@ -680,17 +679,11 @@ async function routeTelegramMessage(env, msg) {
   const acct = await lookupAccountByTelegramId(env, telegramId);
   if (!acct) return sendTelegramMessage(env, chatId, t(lang, 'notConnected'));
 
-  if (text === '🛍️ Shop' || text === '📱 Official Mini App') {
+  if (text === '📱 Official Mini App') {
     return sendTelegramMessage(env, chatId, t(lang, 'shopPrompt'), openAppInlineKeyboard());
   }
   if (text === '🎮 Game List') {
     return sendGameListCategoryMenu(env, chatId);
-  }
-  if (text === '📋 Available Games') {
-    return sendAvailableGamesCategoryMenu(env, chatId);
-  }
-  if (text === '🛒 Buy Account') {
-    return sendTelegramMessage(env, chatId, t(lang, 'buyAccountComingSoon'), MAIN_KEYBOARD);
   }
   // "💼 My Wallet" (old keyboards may still send "💼 Wallet"): show the balance,
   // with a "➕ Top Up Wallet" inline button underneath. The top-up flow only
