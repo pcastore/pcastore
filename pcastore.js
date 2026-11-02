@@ -365,11 +365,12 @@ const MAIN_KEYBOARD = {
     [{ text: '📋 Available Games' }, { text: '🛒 Buy Account' }],
     [{ text: '💼 My Wallet' }, { text: '📦 My Orders' }],
     [{ text: '👤 My Account' }, { text: '💬 Help Center' }],
-    [{ text: '🌐 Language' }, { text: '📱 Official Mini App', web_app: { url: STORE_URL } }],
+    [{ text: '🌐 Language' }, { text: '📱 Official Mini App' }],
   ],
   resize_keyboard: true,
   is_persistent: true,
   one_time_keyboard: false,
+  input_field_placeholder: 'Menu ရွေးပါ',
 };
 
 // The wallet top-up flow's amount step now keeps MAIN_KEYBOARD on screen
@@ -385,7 +386,7 @@ const MAIN_MENU_TEXTS = new Set([
   '👤 My Account', '🛒 Buy Account', '💬 Help Center',
   // legacy labels — customers whose Telegram still shows the old keyboard
   '💼 Wallet', '➕ Top Up Wallet',
-  '📋 Available Games', '🌐 Language', '/start', '/menu', '/help', '/language',
+  '📋 Available Games', '🌐 Language', '📱 Official Mini App', '/start', '/menu', '/help', '/language',
 ]);
 
 // Single reusable "❌ Cancel" inline button, attached to every step of the
@@ -681,7 +682,7 @@ async function routeTelegramMessage(env, msg) {
   const acct = await lookupAccountByTelegramId(env, telegramId);
   if (!acct) return sendTelegramMessage(env, chatId, t(lang, 'notConnected'));
 
-  if (text === '🛍️ Shop') {
+  if (text === '🛍️ Shop' || text === '📱 Official Mini App') {
     return sendTelegramMessage(env, chatId, t(lang, 'shopPrompt'), openAppInlineKeyboard());
   }
   if (text === '🎮 Game List') {
