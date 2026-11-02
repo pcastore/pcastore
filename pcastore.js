@@ -361,16 +361,14 @@ const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
 
 const MAIN_KEYBOARD = {
   keyboard: [
-    [{ text: '🛍️ Shop' }, { text: '🎮 Game List' }],
+    [{ text: '🛍️ Shop', style: 'success' }, { text: '🎮 Game List', style: 'primary' }],
     [{ text: '📋 Available Games' }, { text: '🛒 Buy Account' }],
-    [{ text: '💼 My Wallet' }, { text: '📦 My Orders' }],
+    [{ text: '💼 My Wallet', style: 'primary' }, { text: '📦 My Orders' }],
     [{ text: '👤 My Account' }, { text: '💬 Help Center' }],
     [{ text: '🌐 Language' }, { text: '📱 Official Mini App' }],
   ],
   resize_keyboard: true,
   is_persistent: true,
-  one_time_keyboard: false,
-  input_field_placeholder: 'Menu ရွေးပါ',
 };
 
 // The wallet top-up flow's amount step now keeps MAIN_KEYBOARD on screen
