@@ -1023,13 +1023,12 @@ const ADMIN_GUIDE = [
   '💬 Message buttons — စာတွေအောက်က ခလုတ် (Top Up Wallet, FAQ, Back…)\n\n' +
   '<b>ပြင်ပုံ</b>\n' +
   '/manage → 🔘 Buttons → အမျိုးအစားရွေး → ခလုတ်ရွေး\n' +
-  '• 🏷 Edit label — နာမည်အသစ်ပို့ပါ\n' +
-  '• 🎨 Premium emoji — Premium emoji တစ်ခုပို့ပါ (သို့) emoji ID နံပါတ်ရိုက်ပါ၊ ဖျက်ချင်ရင် <code>-</code>\n' +
+  '• 🏷 Label + Emoji — Premium emoji နဲ့ စာကို တစ်စောင်တည်း ပို့ပါ (emoji = icon၊ စာ = label)။ စာပဲပို့ရင် label ပဲပြောင်း၊ emoji ပဲပို့ရင် icon ပဲပြောင်း၊ <code>-</code> ပို့ရင် Default ပြန်ထား\n' +
+  '• 🧹 Emoji ဖျက် — icon ကိုပဲ ဖယ်\n' +
   '• 🔗 Edit URL — Contact Support လို link ခလုတ်အတွက်\n' +
   '• 🙈 Hide / 👁 Show — ခလုတ်ကို ဖျောက်/ပြန်ပြ\n' +
   '• ♻️ Reset — Default ပြန်ထား\n\n' +
   '<b>Tips</b>\n' +
-  '• Label ပို့တဲ့အခါ အရှေ့ဆုံးမှာ Premium emoji တစ်ခုထည့်ပို့ရင် icon အဖြစ် အလိုအလျောက်ယူပါတယ်\n' +
   '• Premium emoji icon သုံးရင် label ထဲက ပုံမှန် emoji ကို ဖယ်ပါ\n' +
   '• Keyboard အသစ်ကို Customer အားလုံးဆီ ချက်ချင်းပို့ချင်ရင် 📤 Push Menu\n' +
   '• Game နာမည်၊ Payment method၊ Order စာရင်းခလုတ်တွေက data ကနေ အလိုအလျောက်လာတာမို့ admin.html ကနေပဲ ပြင်ရပါတယ်\n' +
@@ -1151,7 +1150,9 @@ function buttonDetailView(id) {
   if (c.hasUrl) text += `URL: <code>${escapeHtml(ov.url || 'default')}</code>\n`;
   text += `ဖျောက်ထားလား: ${ov.hidden ? 'ဟုတ်' : 'မဟုတ်'}`;
   if (c.keep) text += '\n\n<i>ဒီခလုတ်က flow အတွက် လိုအပ်လို့ ဖျောက်လို့မရပါ (label/emoji ပဲ ပြင်နိုင်)</i>';
-  const rows = [[{ text: '🏷 Edit label', callback_data: `adm:bel:${id}` }, { text: '🎨 Premium emoji', callback_data: `adm:bei:${id}` }]];
+  const first = [{ text: '🏷 Label + Emoji', callback_data: `adm:bel:${id}` }];
+  if (ov.icon) first.push({ text: '🧹 Emoji ဖျက်', callback_data: `adm:bec:${id}` });
+  const rows = [first];
   if (c.hasUrl) rows.push([{ text: '🔗 Edit URL', callback_data: `adm:beu:${id}` }]);
   const second = [];
   if (!c.keep) second.push({ text: ov.hidden ? '👁 Show' : '🙈 Hide', callback_data: `adm:bh:${id}` });
@@ -1250,13 +1251,21 @@ async function handleAdminCallback(env, cq, ctx) {
         await setBotSession(env, telegramId, { step, adminKey: a });
         const prompts = {
           admin_btn_label:
-            `🏷 <b>${escapeHtml(c.name)}</b> — label အသစ်ကို ပို့ပါ။\n\nPremium emoji ကို အရှေ့ဆုံးမှာ ထည့်ပို့ရင် icon အဖြစ် အလိုအလျောက်ယူပါမယ်။\nDefault ပြန်ထားချင်ရင် <code>-</code> ပို့ပါ။`,
+            `🏷 <b>${escapeHtml(c.name)}</b> — Label + Premium emoji ကို <b>တစ်ခါတည်း</b> ပို့ပါ။\n\nဥပမာ: Premium emoji တစ်ခု + စာ (<code>🔥 Game List</code>) လို့ တစ်စောင်တည်းပို့ပါ။ Emoji က icon ဖြစ်ပြီး စာက label ဖြစ်ပါမယ်။\n• စာပဲပို့ရင် label ပဲပြောင်းမယ် (emoji မပြောင်း)\n• Emoji ပဲပို့ရင် icon ပဲပြောင်းမယ်\n• Default အကုန်ပြန်ထားချင်ရင် <code>-</code> ပို့ပါ`,
           admin_btn_icon:
             `🎨 <b>${escapeHtml(c.name)}</b> — Premium emoji တစ်ခု ပို့ပါ (သို့) emoji ID နံပါတ် ရိုက်ပါ။\n\nဖျက်ချင်ရင် <code>-</code> ပို့ပါ။`,
           admin_btn_url:
             `🔗 <b>${escapeHtml(c.name)}</b> — URL အသစ်ကို ပို့ပါ (https://… သို့ tg://…)။\n\nDefault ပြန်ထားချင်ရင် <code>-</code> ပို့ပါ။`,
         };
         return send(prompts[step], stopMarkup());
+      }
+      case 'bec': {
+        if (CUSTOM.buttons[a]) {
+          delete CUSTOM.buttons[a].icon;
+          if (!Object.keys(CUSTOM.buttons[a]).length) delete CUSTOM.buttons[a];
+          await saveCustom(env);
+        }
+        return showBtn(a);
       }
       case 'bh': {
         const c = findButton(a);
@@ -1343,31 +1352,36 @@ async function handleAdminInput(env, chatId, telegramId, msg, session) {
     const trimmed = raw.trim();
 
     if (step === 'admin_btn_label') {
-      if (trimmed === '-') { if (CUSTOM.buttons[id]) { delete CUSTOM.buttons[id].label; delete CUSTOM.buttons[id].icon; } prune(); return done('Label ကို Default ပြန်ထားပြီး'); }
-      let label = trimmed;
+      if (trimmed === '-') { delete CUSTOM.buttons[id]; return await done('Label + emoji ကို Default ပြန်ထားပြီး'); }
+      // Take the first Premium emoji anywhere in the message as the icon and cut it out of the label.
+      const ce = entities.find((e) => e.type === 'custom_emoji');
+      let label = raw;
       let icon;
-      const lead = raw.length - raw.trimStart().length;
-      const ce = entities.find((e) => e.type === 'custom_emoji' && e.offset === lead);
-      if (ce) { icon = ce.custom_emoji_id; label = raw.slice(lead + ce.length).trim(); }
-      if (!label) label = c.def.replace(/^[^\p{L}\p{N}]+/u, '').trim() || c.def;
+      if (ce) {
+        icon = ce.custom_emoji_id;
+        label = raw.slice(0, ce.offset) + raw.slice(ce.offset + ce.length);
+      }
+      label = label.replace(/\s+/g, ' ').trim();
+      if (!ce && !label) return fail('Label စာ (သို့) Premium emoji ပို့ပါ။');
       if (label.length > 60) return fail('Label ရှည်လွန်းပါတယ် (60 လုံးအောက်)။');
-      ov().label = label;
+      if (label) ov().label = label;
+      else if (!ov().label) ov().label = c.def.replace(/^[^\p{L}\p{N}]+/u, '').trim() || c.def;
       if (icon) ov().icon = icon;
-      return done('Label သိမ်းပြီး');
+      return await done(icon ? `Label + Premium emoji သိမ်းပြီး (ID: ${icon})` : 'Label သိမ်းပြီး');
     }
     if (step === 'admin_btn_icon') {
-      if (trimmed === '-' || trimmed.toLowerCase() === 'none') { if (CUSTOM.buttons[id]) delete CUSTOM.buttons[id].icon; prune(); return done('Premium emoji ဖျက်ပြီး'); }
+      if (trimmed === '-' || trimmed.toLowerCase() === 'none') { if (CUSTOM.buttons[id]) delete CUSTOM.buttons[id].icon; prune(); return await done('Premium emoji ဖျက်ပြီး'); }
       const ce = entities.find((e) => e.type === 'custom_emoji');
       const icon = ce ? ce.custom_emoji_id : /^\d{5,}$/.test(trimmed) ? trimmed : '';
       if (!icon) return fail('Premium emoji တစ်ခု ပို့ပါ (သို့) emoji ID နံပါတ် ရိုက်ပါ။ ဖျက်ချင်ရင် - ');
       ov().icon = icon;
-      return done(`Premium emoji သိမ်းပြီး (ID: ${icon})`);
+      return await done(`Premium emoji သိမ်းပြီး (ID: ${icon})`);
     }
     if (step === 'admin_btn_url') {
-      if (trimmed === '-') { if (CUSTOM.buttons[id]) delete CUSTOM.buttons[id].url; prune(); return done('URL ကို Default ပြန်ထားပြီး'); }
+      if (trimmed === '-') { if (CUSTOM.buttons[id]) delete CUSTOM.buttons[id].url; prune(); return await done('URL ကို Default ပြန်ထားပြီး'); }
       if (!/^(https?:\/\/|tg:\/\/)\S+$/i.test(trimmed)) return fail('URL က https:// (သို့) tg:// နဲ့ စရပါမယ်။');
       ov().url = trimmed;
-      return done('URL သိမ်းပြီး');
+      return await done('URL သိမ်းပြီး');
     }
     await clearBotSession(env, telegramId);
   } catch (e) {
