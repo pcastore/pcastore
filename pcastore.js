@@ -654,7 +654,12 @@ async function routeTelegramMessage(env, msg) {
     }
   }
   if (session && session.step === 'awaiting_order_id' && text) {
-    return handleTrackOrderId(env, chatId, telegramId, text);
+    if (MAIN_MENU_TEXTS.has(text)) {
+      await clearBotSession(env, telegramId);
+      // fall through to normal command/menu routing below
+    } else {
+      return handleTrackOrderId(env, chatId, telegramId, text);
+    }
   }
 
   const lang = await getLanguage(env, telegramId);
@@ -873,7 +878,7 @@ async function handleTrackOrderCallback(env, cq) {
   return sendTelegramMessage(
     env, chatId,
     'Order ID ကို ရိုက်ထည့်ပါ (ဥပမာ — 12345 or #12345)။ /cancel ဖြင့် ရပ်နိုင်ပါတယ်။',
-    { remove_keyboard: true }
+    MAIN_KEYBOARD
   );
 }
 
@@ -2293,11 +2298,15 @@ async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
   if (replyMarkup) payload.reply_markup = replyMarkup;
   if (parseMode) payload.parse_mode = parseMode;
   try {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      console.error('sendMessage rejected:', res.status, j && j.description);
+    }
   } catch (e) {
     console.error('sendTelegramMessage failed:', e);
   }
