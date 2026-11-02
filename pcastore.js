@@ -137,6 +137,15 @@
  *                             wallet top-up (called by the order Worker's
  *                             notifyTopupCustomer()). Same secret as above.
  *
+ * ADMIN PANEL — /manage (admin only):
+ *   Only Telegram ids listed in ADMIN_TELEGRAM_CHAT_ID (comma-separated for
+ *   several admins) can use it; everyone else gets NO reply. It edits, live
+ *   and with no redeploy: every bot text (bold / italic / quote / link /
+ *   Premium emoji, via Telegram formatting or an "html:" prefix), reply-
+ *   keyboard + inline button labels, Premium emoji icons, URLs, and
+ *   hide/show. Stored in Firestore settings/botCustom. See the in-bot
+ *   "📖 Guide" for usage. Button colors were removed on purpose.
+ *
  * Bot keyboard: "💼 My Wallet" shows the balance with an inline "➕ Top Up
  * Wallet" button; the top-up flow starts only when that button is tapped.
  *
@@ -212,6 +221,9 @@ export default {
     }
 
     try {
+      if (request.method === 'POST' && ['/notify-connected', '/notify-order-status', '/notify-topup-status'].includes(url.pathname)) {
+        await loadCustom(env);
+      }
       if (request.method === 'POST' && url.pathname === '/auth/miniapp') {
         return await handleMiniApp(request, env, corsHeaders);
       }
@@ -361,7 +373,7 @@ const SESSION_TIMEOUT_MS = 20 * 60 * 1000; // 20 minutes
 
 const MAIN_KEYBOARD = {
   keyboard: [
-    [{ text: '🎮 Game List', style: 'success' }, { text: '💼 My Wallet', style: 'primary' }],
+    [{ text: '🎮 Game List' }, { text: '💼 My Wallet' }],
     [{ text: '📦 My Orders' }, { text: '👤 My Account' }],
     [{ text: '💬 Help Center' }, { text: '🌐 Language' }],
     [{ text: '📱 Official Mini App' }],
@@ -424,7 +436,7 @@ function paymentCopyRow(number, accountName) {
 }
 
 function cancelInlineKeyboard(extraRows) {
-  return { inline_keyboard: [...(extraRows || []), [{ text: '❌ Cancel', style: 'danger', callback_data: 'topup_cancel' }]] };
+  return { inline_keyboard: [...(extraRows || []), [{ text: '❌ Cancel', callback_data: 'topup_cancel' }]] };
 }
 
 // ---------------------------------------------------------------------------
@@ -466,7 +478,7 @@ const GAME_GENRES = [
 function findGenre(id) { return GAME_GENRES.find((g) => g.id === id); }
 
 function openAppInlineKeyboard() {
-  return { inline_keyboard: [[{ text: '🚀 Open PCA Store', style: 'primary', web_app: { url: STORE_URL } }]] };
+  return { inline_keyboard: [[{ text: '🚀 Open PCA Store', web_app: { url: STORE_URL } }]] };
 }
 
 async function handleTelegramWebhook(request, env, ctx) {
@@ -485,6 +497,7 @@ async function handleTelegramWebhook(request, env, ctx) {
   }
 
   const update = await safeJson(request);
+  await loadCustom(env);
 
   // Stop the button spinner immediately — runs in parallel with everything below.
   if (update && update.callback_query) {
@@ -524,6 +537,63 @@ async function handleTelegramWebhook(request, env, ctx) {
 // wallet top-up walkthrough are unchanged/Burmese-only for now). Add new
 // entries here the same way to extend coverage later.
 // ---------------------------------------------------------------------------
+const HTML_MARK = '⁣'; // invisible marker: "this string is Telegram-HTML (admin-customized)"
+const isMarked = (s) => typeof s === 'string' && s.startsWith(HTML_MARK);
+const unmark = (s) => (isMarked(s) ? s.slice(HTML_MARK.length) : s);
+function toHtml(s) { return isMarked(s) ? unmark(s) : escapeHtml(s); }
+// Joins message parts; if any part is admin-customized HTML, the rest is escaped and the result stays HTML.
+function concatMsg(...parts) {
+  if (!parts.some(isMarked)) return parts.join('');
+  return HTML_MARK + parts.map(toHtml).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Admin customizations — stored in Firestore "settings/botCustom" (field
+// `data` = JSON string). Edited ONLY through /manage (admin-only).
+//   { texts:   { <messageKey>: { my: '<html>', en: '<html>' } },
+//     buttons: { <buttonId>:   { label, icon, url, hidden } } }
+// Cached 30s per warm isolate; every admin action force-reloads first.
+// ---------------------------------------------------------------------------
+let CUSTOM = { texts: {}, buttons: {} };
+let customLoadedAt = 0;
+
+async function loadCustom(env, force) {
+  const now = Date.now();
+  if (!force && now - customLoadedAt < 30000) return;
+  try {
+    const token = await getFirestoreAccessToken(env);
+    const projectId = firestoreProjectId(env);
+    const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
+    const res = await fetch(`${base}/settings/botCustom`, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 404) { CUSTOM = { texts: {}, buttons: {} }; customLoadedAt = now; return; }
+    if (!res.ok) { customLoadedAt = now - 20000; return; } // retry in ~10s
+    const doc = await res.json();
+    const raw = doc.fields ? fsField(doc.fields, 'data') : '';
+    const parsed = raw ? JSON.parse(raw) : {};
+    CUSTOM = { texts: parsed.texts || {}, buttons: parsed.buttons || {} };
+    customLoadedAt = now;
+  } catch (e) {
+    console.error('loadCustom failed:', e);
+    customLoadedAt = now - 20000;
+  }
+}
+
+async function saveCustom(env) {
+  await fsMergeDoc(env, 'settings/botCustom', { data: JSON.stringify(CUSTOM), updatedAt: new Date() });
+  customLoadedAt = Date.now();
+}
+
+function adminIds(env) {
+  return String(env.ADMIN_TELEGRAM_CHAT_ID || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+function isAdmin(env, telegramId) {
+  return adminIds(env).includes(String(telegramId));
+}
+
+// ---------------------------------------------------------------------------
+// Message strings. Templates use {placeholders} so the admin can edit them
+// from /manage. Burmese default; English where it existed before.
+// ---------------------------------------------------------------------------
 const MESSAGES = {
   cancelled: { my: 'ပယ်ဖျက်လိုက်ပါပြီ။', en: 'Cancelled.' },
   flooded: {
@@ -531,8 +601,8 @@ const MESSAGES = {
     en: "Please slow down a bit 🙏 That's a lot of messages — try again shortly.",
   },
   welcomeBack: {
-    my: (name) => `မင်္ဂလာပါ ${name} 👋\n\nPCA Store မှာ ဂိမ်း Top Up နဲ့ Voucher ဝန်ဆောင်မှုတွေကို လွယ်ကူစွာ အသုံးပြုနိုင်ပါပြီ။\n\nအောက်က Quick Menu ကနေ လိုအပ်တာကို ရွေးချယ်ပါ။`,
-    en: (name) => `Welcome back, ${name} 👋\n\nTop up games and buy vouchers on PCA Store, right from this chat.\n\nPick what you need from the Quick Menu below.`,
+    my: 'မင်္ဂလာပါ {name} 👋\n\nPCA Store မှာ ဂိမ်း Top Up နဲ့ Voucher ဝန်ဆောင်မှုတွေကို လွယ်ကူစွာ အသုံးပြုနိုင်ပါပြီ။\n\nအောက်က Quick Menu ကနေ လိုအပ်တာကို ရွေးချယ်ပါ။',
+    en: 'Welcome back, {name} 👋\n\nTop up games and buy vouchers on PCA Store, right from this chat.\n\nPick what you need from the Quick Menu below.',
   },
   welcomeNew: {
     my: 'မင်္ဂလာပါ 👋\n\nPCA Store ကို အသုံးပြုရန် App ထဲက "Log in with Telegram" ကို အရင်နှိပ်ပြီး account ချိတ်ဆက်ပေးပါ။',
@@ -555,18 +625,18 @@ const MESSAGES = {
     en: "🛒 Buy Account\n\n🚧 Coming soon!\n\nThe in-chat game account marketplace is still being built. We'll message you right here as soon as it's ready.",
   },
   wallet: {
-    my: (balance) => `💼 My Wallet\n\nလက်ကျန်ငွေ: ${balance} MMK`,
-    en: (balance) => `💼 My Wallet\n\nBalance: ${balance} MMK`,
+    my: '💼 My Wallet\n\nလက်ကျန်ငွေ: {balance} MMK',
+    en: '💼 My Wallet\n\nBalance: {balance} MMK',
   },
   account: {
-    my: (acct) => `👤 My Account\n\nAccount ID: ${acct.guestId}\nName: ${acct.name || '-'}\nWallet: ${Number(acct.walletBalance || 0).toLocaleString()} MMK`,
-    en: (acct) => `👤 My Account\n\nAccount ID: ${acct.guestId}\nName: ${acct.name || '-'}\nWallet: ${Number(acct.walletBalance || 0).toLocaleString()} MMK`,
+    my: '👤 My Account\n\nAccount ID: {id}\nName: {name}\nWallet: {wallet} MMK',
+    en: '👤 My Account\n\nAccount ID: {id}\nName: {name}\nWallet: {wallet} MMK',
   },
   ordersEmpty: { my: '📦 Order မှတ်တမ်း မရှိသေးပါ။', en: "📦 You don't have any orders yet." },
-  ordersHeader: { my: (count) => `📦 My Orders (latest ${count})`, en: (count) => `📦 My Orders (latest ${count})` },
+  ordersHeader: { my: '📦 My Orders (latest {count})', en: '📦 My Orders (latest {count})' },
   topupPrompt: {
-    my: (min, max) => `➕ Wallet ဖြည့်ရန်\n\nဖြည့်ချင်တဲ့ ပမာဏကို ခလုတ်နှိပ်ရွေးပါ၊ ဒါမှမဟုတ် ကိုယ်တိုင်ရိုက်ထည့်နိုင်ပါတယ် (${min} - ${max} MMK)\n\nရပ်ချင်ရင် /cancel ကို ရိုက်ပါ။`,
-    en: (min, max) => `➕ Top Up Wallet\n\nPick an amount below, or type your own (${min} - ${max} MMK)\n\nSend /cancel to stop.`,
+    my: '➕ Wallet ဖြည့်ရန်\n\nဖြည့်ချင်တဲ့ ပမာဏကို ခလုတ်နှိပ်ရွေးပါ၊ ဒါမှမဟုတ် ကိုယ်တိုင်ရိုက်ထည့်နိုင်ပါတယ် ({min} - {max} MMK)\n\nရပ်ချင်ရင် /cancel ကို ရိုက်ပါ။',
+    en: '➕ Top Up Wallet\n\nPick an amount below, or type your own ({min} - {max} MMK)\n\nSend /cancel to stop.',
   },
   helpCenter: {
     my: '💬 Help Center\n\nအော်ဒါ၊ ငွေပေးချေမှု သို့မဟုတ် account ပြဿနာရှိပါက Support ကို ဆက်သွယ်ပါ။',
@@ -583,25 +653,727 @@ const MESSAGES = {
     en: 'That top-up flow has expired or was never started. Start again from 💼 My Wallet → Top Up Wallet.',
   },
   topupRateLimited: {
-    my: (mins) => `Top Up တောင်းဆိုမှု အများကြီး ပို့ထားပါပြီ။ ${mins} မိနစ်အကြာမှ ထပ်ကြိုးစားပေးပါ၊ သို့မဟုတ် Help Center ကို ဆက်သွယ်ပါ။`,
-    en: (mins) => `You've sent a lot of top-up requests. Please try again in about ${mins} minute${mins === 1 ? '' : 's'}, or contact Help Center.`,
+    my: 'Top Up တောင်းဆိုမှု အများကြီး ပို့ထားပါပြီ။ {mins} မိနစ်အကြာမှ ထပ်ကြိုးစားပေးပါ၊ သို့မဟုတ် Help Center ကို ဆက်သွယ်ပါ။',
+    en: "You've sent a lot of top-up requests. Please try again in about {mins} min, or contact Help Center.",
   },
   receiptProcessing: { my: 'Receipt ကို လက်ခံရရှိပါပြီ၊ စစ်ဆေးနေပါတယ်...', en: 'Receipt received, checking it now...' },
   topupSuccess: {
-    my: (amount) => `✅ Top Up Request ပို့ပြီးပါပြီ\n\nပမာဏ: ${amount} MMK\n\nAdmin စစ်ဆေးပြီးရင် Wallet ထဲ ပေါင်းထည့်ပေးပါမယ်။`,
-    en: (amount) => `✅ Top-up request sent\n\nAmount: ${amount} MMK\n\nWe'll add it to your wallet once our admin verifies it.`,
+    my: '✅ Top Up Request ပို့ပြီးပါပြီ\n\nပမာဏ: {amount} MMK\n\nAdmin စစ်ဆေးပြီးရင် Wallet ထဲ ပေါင်းထည့်ပေးပါမယ်။',
+    en: "✅ Top-up request sent\n\nAmount: {amount} MMK\n\nWe'll add it to your wallet once our admin verifies it.",
   },
   receiptFailed: {
     my: 'Receipt တင်ရာတွင် အမှားရှိပါသည်။ ထပ်မံကြိုးစားပေးပါ။',
     en: 'Something went wrong uploading the receipt. Please try again.',
   },
+  menuUpdated: { my: '🔄 Menu အသစ် ပြင်ဆင်ပြီးပါပြီ 👇', en: '🔄 The menu has been updated 👇' },
+  // --- Game List / Available Games ---
+  gameListMenu: { my: '🎮 Game List\n\nဝန်ဆောင်မှု အမျိုးအစား ရွေးချယ်ပါ:' },
+  genrePrompt: { my: '{cat}\n\nဂိမ်း Category ရွေးချယ်ပါ:' },
+  noGames: { my: '{header}\n\nဂိမ်းစာရင်း မရှိသေးပါ။' },
+  pickGame: { my: '{header}\n\nဂိမ်းတစ်ခု ရွေးချယ်ပါ: ({count})' },
+  pickServer: { my: '{name}\n\nServer / Region ရွေးချယ်ပါ:' },
+  openApp: { my: '🎮 {label}\n\nအောက်က ခလုတ်ကို နှိပ်ပြီး Store App ထဲမှာ ဖွင့်ပါ:' },
+  availMenu: { my: '📋 Available Games\n\nဘယ် Category ကြည့်ချင်ပါသလဲ?' },
+  availHeader: {
+    my: '📋 {cat} — Available Games ({count})\n\nဂိမ်းအမည်ကို နှိပ်ပြီး Copy ယူပါ — ပြီးရင် @pcagamestore_bot ရဲ့ search box ထဲ Paste လုပ်ပြီး တိုက်ရိုက်ရှာနိုင်ပါတယ်:',
+  },
+  // --- Wallet top-up flow ---
+  topupAmountInvalid: { my: 'ပမာဏကို ဂဏန်းနဲ့ ရိုက်ထည့်ပါ (ဥပမာ - 10000)။' },
+  topupAmountMin: { my: 'အနည်းဆုံး {min} MMK ဖြစ်ရပါမယ်။' },
+  topupAmountMax: { my: 'အများဆုံး {max} MMK ဖြစ်ရပါမယ်။' },
+  noPaymentMethods: { my: 'Payment method များ ခေတ္တမရနိုင်ပါ။ PCA Store app ထဲက Wallet ကနေ ဖြည့်ကြည့်ပါ။' },
+  pickMethod: { my: 'ပမာဏ: {amount} MMK\n\nငွေပေးချေမှု နည်းလမ်း ရွေးချယ်ပါ:' },
+  topupConfirm: { my: 'ပမာဏ: {amount} MMK\n{method} ဖြင့် လွှဲမှာ မှန်ပါသလား?' },
+  topupEditWhat: { my: 'ဘာကို ပြင်ချင်ပါသလဲ?' },
+  receiptPrompt: {
+    my: '💳 {method}\n\nအကောင့်: {account}\nနံပါတ်: {number}\n\n{amount} MMK လွှဲပြီးရင် Receipt screenshot ကို ဒီမှာ ပို့ပါ။',
+  },
+  sessionWarning: {
+    my: '⏰ 2 မိနစ်အတွင်း Top Up flow ကုန်တော့မယ်။ ဆက်လုပ်ချင်ရင် အမြန်ဆက်လုပ်ပါ၊ မဟုတ်ရင် flow ပျက်သွားပြီး 💼 My Wallet ထဲက Top Up Wallet ကနေ ပြန်စရပါမယ်။',
+    en: "⏰ Your top-up flow will expire in 2 minutes. Keep going now, or it'll reset and you'll need to start again from 💼 My Wallet → Top Up Wallet.",
+  },
+  topupApproved: {
+    my: '✅ Top Up အောင်မြင်ပါပြီ\n\nပမာဏ: {amount}{balance}\n\nWallet ထဲ ပေါင်းထည့်ပြီးပါပြီ။ ကျေးဇူးတင်ပါတယ်!',
+  },
+  topupRejected: {
+    my: '❌ Top Up မအောင်မြင်ပါ\n\nပမာဏ: {amount}\n\nReceipt (သို့) ငွေလွှဲမှု မှန်ကန်မှုမရှိသဖြင့် ပယ်ချလိုက်ပါသည်။ အသေးစိတ်သိရှိလိုပါက Help Center သို့ ဆက်သွယ်ပါ။',
+  },
+  topupUpdate: { my: '🔔 Top Up Update\n\nပမာဏ: {amount}\nအခြေအနေ: {status}' },
+  lowBalance: {
+    my: '⚠️ Wallet လက်ကျန် နည်းနေပါပြီ ({balance} MMK)။\n\nနောက် Order တင်ရင် ငွေမလုံလောက်ဘဲ ပျက်မသွားအောင် အခုပဲ Top Up လုပ်ထားပါ။',
+  },
+  // --- Help Center / FAQ / Track ---
+  faqTitle: { my: '❓ FAQ — မေးလေ့ရှိသော မေးခွန်းများ\n\nမေးခွန်းတစ်ခု ရွေးချယ်ပါ:' },
+  faq_topup_a: {
+    my: '💼 My Wallet ကိုနှိပ်ပြီး ➕ Top Up Wallet ခလုတ်ကို နှိပ်ကာ ပမာဏရိုက်ထည့်ပါ → ငွေပေးချေမှု နည်းလမ်း ရွေးပါ → Receipt ဓာတ်ပုံ ပို့ပါ။ Admin စစ်ဆေးပြီးသည်နှင့် Wallet ထဲ ချက်ချင်း ပေါင်းပေးပါလိမ့်မယ်။',
+  },
+  faq_delivery_a: {
+    my: 'ပုံမှန်အားဖြင့် မိနစ် 5-30 အတွင်း ပို့ဆောင်ပေးပါတယ်။ Order Status ကို 📦 My Orders (သို့) 🔍 Track my order ကနေ အချိန်မရွေး စစ်ကြည့်နိုင်ပါတယ်။',
+  },
+  faq_refund_a: {
+    my: 'Order Fail ဖြစ်ရင် Wallet ထဲ ငွေပြန်အမ်းပေးပါတယ်။ ကြာချိန်ကြာလွန်းနေရင် (သို့) ပြဿနာရှိရင် 💬 Contact Support ကို ဆက်သွယ်ပေးပါ။',
+  },
+  faq_account_a: {
+    my: 'Telegram Account ကို တစ်ကြိမ်တည်း ချိတ်ဆက်ပြီးရင် တခြားသူက ပြန်ချိတ်လို့ မရတော့ပါ။ Wallet ထဲ ငွေရှိပြီးသား Account ကို ပြောင်းချိတ်ဖို့ လိုရင် Admin ကို ဆက်သွယ် verify ပြုလုပ်ရပါမယ်။',
+  },
+  trackPrompt: { my: 'Order ID ကို ရိုက်ထည့်ပါ (ဥပမာ — 12345 or #12345)။ /cancel ဖြင့် ရပ်နိုင်ပါတယ်။' },
+  trackNotFound: { my: 'Order #{id} ကို မတွေ့ရှိပါ။ Order ID ကို ပြန်စစ်ပြီး ထပ်ကြိုးစားပေးပါ။' },
+  // --- Order status pushes ---
+  orderSuccess: {
+    my: '✅ Order ပြီးစီးပါပြီ!\n\n{order}{details}\n\nအော်ဒါ ပို့ဆောင်ပြီးပါပြီ။ ကျေးဇူးတင်ပါတယ်!{timeline}{note}',
+  },
+  orderFailed: {
+    my: '❌ Order မအောင်မြင်ပါ\n\n{order}{details}\n\nပြဿနာတစ်ခုခု ဖြစ်ပွားခဲ့ပါသည်။ အသေးစိတ် သိရှိလိုပါက Help Center သို့ ဆက်သွယ်ပါ။{timeline}{note}',
+  },
+  orderProcessing: {
+    my: '⏳ Order စီစဉ်နေပါသည်\n\n{order}{details}\n\nခဏစောင့်ပေးပါ၊ လုပ်ဆောင်နေပါသည်။{timeline}{note}',
+  },
+  orderUpdate: { my: '🔔 Order Update\n\n{order}{details}\n\nအခြေအနေ: {status}{timeline}{note}' },
+  connected: {
+    my: '✅ Telegram Connected\n\nUser ID: {id}\nName: {name}\nBalance: {balance} MMK\nConnected Time: {time}',
+  },
 };
+
+// Placeholder names per message, in the order positional args are passed to t().
+const MSG_VARS = {
+  welcomeBack: ['name'], wallet: ['balance'], account: ['id', 'name', 'wallet'], ordersHeader: ['count'],
+  topupPrompt: ['min', 'max'], topupRateLimited: ['mins'], topupSuccess: ['amount'],
+  genrePrompt: ['cat'], noGames: ['header'], pickGame: ['header', 'count'], pickServer: ['name'], openApp: ['label'],
+  availHeader: ['cat', 'count'], topupAmountMin: ['min'], topupAmountMax: ['max'], pickMethod: ['amount'],
+  topupConfirm: ['amount', 'method'], receiptPrompt: ['method', 'account', 'number', 'amount'],
+  trackNotFound: ['id'], connected: ['id', 'name', 'balance', 'time'], lowBalance: ['balance'],
+  topupApproved: ['amount', 'balance'], topupRejected: ['amount'], topupUpdate: ['amount', 'status'],
+  orderSuccess: ['order', 'details', 'timeline', 'note'], orderFailed: ['order', 'details', 'timeline', 'note'],
+  orderProcessing: ['order', 'details', 'timeline', 'note'], orderUpdate: ['order', 'details', 'status', 'timeline', 'note'],
+};
+
+const SAMPLE_VARS = {
+  name: 'Raycod', balance: '25,000', id: '12345', wallet: '25,000', count: 3, min: '5,000', max: '10,000,000', mins: 10,
+  amount: '10,000', cat: '⚡ Top Up', header: '⚡ Top Up · 🎯 MOBA', method: 'KBZPay', account: 'Mg Mg',
+  number: '09123456789', label: 'Mobile Legends', order: 'Order #12345 — Mobile Legends',
+  details: '\nGame ID: 123456 (2001)\nဈေးနှုန်း: 5,000 MMK', timeline: '\n\n🟢 Pending → 🟡 Processing → ⚪ Success',
+  note: '', status: 'Processing', time: '02/11/2026, 10:36:00 (Yangon)',
+};
+function sampleVarsFor(key) {
+  const o = {};
+  (MSG_VARS[key] || []).forEach((n) => { o[n] = SAMPLE_VARS[n] !== undefined ? SAMPLE_VARS[n] : `{${n}}`; });
+  return o;
+}
+
+function fillVars(tpl, vars, escape) {
+  return String(tpl).replace(/\{(\w+)\}/g, (m, k) => {
+    if (!vars || !(k in vars) || vars[k] === undefined || vars[k] === null) return m;
+    const v = String(vars[k]);
+    return escape ? escapeHtml(v) : v;
+  });
+}
 
 function t(lang, key, ...args) {
   const entry = MESSAGES[key];
   if (!entry) return '';
-  const variant = entry[lang] || entry.my;
-  return typeof variant === 'function' ? variant(...args) : variant;
+  let vars = {};
+  if (args.length === 1 && args[0] && typeof args[0] === 'object') vars = args[0];
+  else (MSG_VARS[key] || []).forEach((n, i) => { vars[n] = args[i]; });
+  const custom = CUSTOM.texts && CUSTOM.texts[key];
+  const customHtml = custom && (custom[lang] || (!entry[lang] && custom.my));
+  if (customHtml) return HTML_MARK + fillVars(customHtml, vars, true);
+  return fillVars(entry[lang] || entry.my, vars, false);
+}
+
+// ---------------------------------------------------------------------------
+// Button customization. Buttons are recognised by their DEFAULT label, so
+// every send path (sendTelegramMessage / edit / broadcast) applies the
+// admin's overrides in one place — no call site needs to know about them.
+// ---------------------------------------------------------------------------
+const BUTTON_CATALOG = [
+  // Reply keyboard (bottom menu)
+  { id: 'kb_game', kind: 'kb', def: '🎮 Game List', name: 'Game List' },
+  { id: 'kb_wallet', kind: 'kb', def: '💼 My Wallet', name: 'My Wallet' },
+  { id: 'kb_orders', kind: 'kb', def: '📦 My Orders', name: 'My Orders' },
+  { id: 'kb_account', kind: 'kb', def: '👤 My Account', name: 'My Account' },
+  { id: 'kb_help', kind: 'kb', def: '💬 Help Center', name: 'Help Center' },
+  { id: 'kb_lang', kind: 'kb', def: '🌐 Language', name: 'Language' },
+  { id: 'kb_mini', kind: 'kb', def: '📱 Official Mini App', name: 'Official Mini App' },
+  // Inline (under messages)
+  { id: 'in_topup', kind: 'in', def: '➕ Top Up Wallet', name: 'Top Up Wallet (My Wallet အောက်)' },
+  { id: 'in_faq', kind: 'in', def: '❓ FAQ', name: 'FAQ (Help Center)' },
+  { id: 'in_track', kind: 'in', def: '🔍 Track my order', name: 'Track my order (Help Center)' },
+  { id: 'in_support', kind: 'in', def: '💬 Contact Support', name: 'Contact Support', hasUrl: true },
+  { id: 'in_faqhelp', kind: 'in', def: '💬 Help Center', name: 'Help Center (FAQ အောက်)' },
+  { id: 'in_openstore', kind: 'in', def: '🚀 Open PCA Store', name: 'Open PCA Store' },
+  { id: 'in_openstore2', kind: 'in', def: '🚀 Open Store', name: 'Open Store (Order tracker)' },
+  { id: 'in_cancel', kind: 'in', def: '❌ Cancel', name: 'Cancel (Top Up)', keep: true },
+  { id: 'in_confirm', kind: 'in', def: '✅ Confirm', name: 'Confirm (Top Up)', keep: true },
+  { id: 'in_edit', kind: 'in', def: '✏️ Edit', name: 'Edit (Top Up)', keep: true },
+  { id: 'in_chgamt_a', kind: 'in', def: '🔢 Change Amount', name: 'Change Amount (Edit မီနူး)', keep: true },
+  { id: 'in_chgmeth_a', kind: 'in', def: '💳 Change Method', name: 'Change Method (Edit မီနူး)', keep: true },
+  { id: 'in_back_amt', kind: 'in', def: '🔙 Change Amount', name: 'Change Amount (Receipt)', keep: true },
+  { id: 'in_back_meth', kind: 'in', def: '🔙 Change Method', name: 'Change Method (Receipt)', keep: true },
+  { id: 'in_more', kind: 'in', def: '➕ More', name: 'More (ပမာဏ)', keep: true },
+  { id: 'in_retry', kind: 'in', def: '🔄 ထပ်ကြိုးစားမည်', name: 'Retry receipt', keep: true },
+  { id: 'in_copynum', kind: 'in', def: '📋 Copy Number', name: 'Copy Number' },
+  { id: 'in_copyname', kind: 'in', def: '📋 Copy Name', name: 'Copy Name' },
+  { id: 'in_back', kind: 'in', def: '🔙 Back', name: 'Back', keep: true },
+  { id: 'in_type', kind: 'in', def: '🔙 Type', name: 'Back — Type', keep: true },
+  { id: 'in_genre', kind: 'in', def: '🔙 Genre', name: 'Back — Genre', keep: true },
+  { id: 'in_faqback', kind: 'in', def: '🔙 FAQ List', name: 'Back — FAQ List', keep: true },
+  { id: 'in_prev', kind: 'in', def: '⬅️ Prev', name: 'Prev', keep: true },
+  { id: 'in_next', kind: 'in', def: 'Next ➡️', name: 'Next', keep: true },
+  { id: 'in_all', kind: 'in', def: '🗂️ All', name: 'Genre: All' },
+  { id: 'in_g_moba', kind: 'in', def: '🎯 MOBA', name: 'Genre: MOBA' },
+  { id: 'in_g_br', kind: 'in', def: '🚀 Battle Royale', name: 'Genre: Battle Royale' },
+  { id: 'in_g_survival', kind: 'in', def: '🧭 Survival', name: 'Genre: Survival' },
+  { id: 'in_g_fun', kind: 'in', def: '😊 Fun', name: 'Genre: Fun' },
+  { id: 'in_g_creative', kind: 'in', def: '🪶 Creative', name: 'Genre: Creative' },
+  { id: 'in_cat_topup', kind: 'in', def: '⚡ Top Up', name: 'Category: Top Up' },
+  { id: 'in_cat_voucher', kind: 'in', def: '🎁 Voucher / Gift Card', name: 'Category: Voucher' },
+  { id: 'in_refresh', kind: 'in', def: '🔄 Refresh', name: 'Refresh (Order tracker)', keep: true },
+  { id: 'in_st_pending', kind: 'in', def: '🟡 Pending — စောင့်ဆိုင်းနေသည်', name: 'Status: Pending', keep: true },
+  { id: 'in_st_processing', kind: 'in', def: '🔵 Processing — လုပ်ဆောင်နေသည်', name: 'Status: Processing', keep: true },
+  { id: 'in_st_success', kind: 'in', def: '✅ Success — ပြီးစီးပါပြီ', name: 'Status: Success', keep: true },
+  { id: 'in_st_fail', kind: 'in', def: '❌ Failed — မအောင်မြင်ပါ', name: 'Status: Failed', keep: true },
+  { id: 'in_faq_topup', kind: 'in', def: '💰 ငွေသွင်းနည်း', name: 'FAQ: ငွေသွင်းနည်း' },
+  { id: 'in_faq_delivery', kind: 'in', def: '⏱️ ပို့ချိန်', name: 'FAQ: ပို့ချိန်' },
+  { id: 'in_faq_refund', kind: 'in', def: '↩️ Order မအောင်မြင်ရင်', name: 'FAQ: Order မအောင်မြင်ရင်' },
+  { id: 'in_faq_account', kind: 'in', def: '🔒 Account လုံခြုံရေး', name: 'FAQ: Account လုံခြုံရေး' },
+];
+const BTN_KB = {};
+const BTN_IN = {};
+BUTTON_CATALOG.forEach((c) => { (c.kind === 'kb' ? BTN_KB : BTN_IN)[c.def] = c; });
+function findButton(id) { return BUTTON_CATALOG.find((c) => c.id === id); }
+function btnLabel(id, def) { const o = CUSTOM.buttons && CUSTOM.buttons[id]; return (o && o.label) || def; }
+
+// A tapped reply-keyboard button arrives as plain text. If the admin renamed
+// it, map the custom label back to the default text the router matches on.
+function kbNormalize(text) {
+  const b = CUSTOM.buttons || {};
+  for (const c of BUTTON_CATALOG) {
+    if (c.kind === 'kb' && b[c.id] && b[c.id].label === text) return c.def;
+  }
+  return text;
+}
+
+function applyButtonOverrides(markup) {
+  if (!markup || (!markup.inline_keyboard && !markup.keyboard)) return markup;
+  const ovs = CUSTOM.buttons || {};
+  if (!Object.keys(ovs).length) return markup;
+  const isKb = !!markup.keyboard;
+  const map = isKb ? BTN_KB : BTN_IN;
+  const rowsKey = isKb ? 'keyboard' : 'inline_keyboard';
+  const rows = [];
+  for (const row of markup[rowsKey]) {
+    const out = [];
+    for (const b of row) {
+      const c = map[b.text];
+      const ov = c && ovs[c.id];
+      if (!ov) { out.push(b); continue; }
+      if (ov.hidden && !c.keep) continue;
+      const nb = { ...b };
+      if (ov.label) nb.text = ov.label;
+      if (ov.icon) nb.icon_custom_emoji_id = ov.icon;
+      if (ov.url && nb.url) nb.url = ov.url;
+      out.push(nb);
+    }
+    if (out.length) rows.push(out);
+  }
+  if (!rows.length) return undefined;
+  return { ...markup, [rowsKey]: rows };
+}
+
+// Builds a Telegram payload: admin-customized (marked) text goes out as HTML,
+// and button overrides are applied to the markup.
+function prepareOutgoing(payload, text, replyMarkup, parseMode) {
+  if (isMarked(text)) { payload.text = unmark(text); payload.parse_mode = 'HTML'; }
+  else { payload.text = text; if (parseMode) payload.parse_mode = parseMode; }
+  const rm = applyButtonOverrides(replyMarkup);
+  if (rm) payload.reply_markup = rm;
+  return payload;
+}
+
+// Converts a Telegram message (text + entities) into Telegram-HTML so an admin
+// can format in the Telegram app itself: bold, italic, underline, strike,
+// spoiler, code, link, quote, expandable quote, Premium (custom) emoji.
+function entitiesToHtml(text, entities) {
+  const wrap = (e, inner) => {
+    switch (e.type) {
+      case 'bold': return `<b>${inner}</b>`;
+      case 'italic': return `<i>${inner}</i>`;
+      case 'underline': return `<u>${inner}</u>`;
+      case 'strikethrough': return `<s>${inner}</s>`;
+      case 'spoiler': return `<tg-spoiler>${inner}</tg-spoiler>`;
+      case 'code': return `<code>${inner}</code>`;
+      case 'pre': return e.language ? `<pre><code class="language-${escapeHtml(e.language)}">${inner}</code></pre>` : `<pre>${inner}</pre>`;
+      case 'text_link': return `<a href="${escapeHtml(e.url).replace(/"/g, '&quot;')}">${inner}</a>`;
+      case 'blockquote': return `<blockquote>${inner}</blockquote>`;
+      case 'expandable_blockquote': return `<blockquote expandable>${inner}</blockquote>`;
+      case 'custom_emoji': return `<tg-emoji emoji-id="${e.custom_emoji_id}">${inner}</tg-emoji>`;
+      default: return inner;
+    }
+  };
+  const ents = (entities || []).filter((e) => e.length > 0).slice().sort((a, b) => a.offset - b.offset || b.length - a.length);
+  const render = (start, end, list) => {
+    let out = '';
+    let pos = start;
+    let i = 0;
+    while (i < list.length) {
+      const e = list[i];
+      if (e.offset < pos || e.offset + e.length > end) { i++; continue; }
+      out += escapeHtml(text.slice(pos, e.offset));
+      const eEnd = e.offset + e.length;
+      const kids = [];
+      let j = i + 1;
+      while (j < list.length && list[j].offset < eEnd) { kids.push(list[j]); j++; }
+      out += wrap(e, render(e.offset, eEnd, kids));
+      pos = eEnd;
+      i = j;
+    }
+    return out + escapeHtml(text.slice(pos, end));
+  };
+  return render(0, text.length, ents);
+}
+
+// ---------------------------------------------------------------------------
+// /manage — ADMIN-ONLY control panel (admin = Telegram id in
+// env.ADMIN_TELEGRAM_CHAT_ID, comma-separated for several). Anyone else
+// typing /manage or tapping an "adm:" button gets no reply at all.
+// ---------------------------------------------------------------------------
+const TEXT_LABELS = [
+  ['welcomeBack', '👋 /start — Account ချိတ်ပြီးသူ'],
+  ['welcomeNew', '👋 /start — Account မချိတ်ရသေး'],
+  ['help', '❓ /help စာ'],
+  ['menuUpdated', '🔄 Menu Update အကြောင်းကြား'],
+  ['fallback', '🤔 နားမလည်သောစာ Reply'],
+  ['cancelled', '✖️ Cancel လုပ်ပြီး'],
+  ['flooded', '🚦 Message များလွန်း'],
+  ['notConnected', '🔗 Account မချိတ်ရသေး'],
+  ['shopPrompt', '🛍️ Mini App ဖွင့်ရန်'],
+  ['buyAccountComingSoon', '🛒 Buy Account Coming Soon'],
+  ['wallet', '💼 My Wallet'],
+  ['account', '👤 My Account'],
+  ['ordersEmpty', '📦 Order မရှိသေး'],
+  ['ordersHeader', '📦 My Orders ခေါင်းစဉ်'],
+  ['helpCenter', '💬 Help Center'],
+  ['languagePrompt', '🌐 ဘာသာစကားရွေးရန်'],
+  ['languageSet', '🌐 ဘာသာစကားပြောင်းပြီး'],
+  ['gameListMenu', '🎮 Game List — အမျိုးအစား'],
+  ['genrePrompt', '🎮 Game List — Genre ရွေး'],
+  ['pickGame', '🎮 Game List — ဂိမ်းရွေး'],
+  ['noGames', '🎮 Game List — ဂိမ်းမရှိ'],
+  ['pickServer', '🎮 Game List — Server ရွေး'],
+  ['openApp', '🎮 Game List — Open App'],
+  ['availMenu', '📋 Available Games — မီနူး'],
+  ['availHeader', '📋 Available Games — ခေါင်းစဉ်'],
+  ['topupPrompt', '➕ Top Up — ပမာဏမေး'],
+  ['topupAmountInvalid', '➕ Top Up — ပမာဏမှား'],
+  ['topupAmountMin', '➕ Top Up — အနည်းဆုံး'],
+  ['topupAmountMax', '➕ Top Up — အများဆုံး'],
+  ['noPaymentMethods', '➕ Top Up — Payment မရှိ'],
+  ['pickMethod', '➕ Top Up — Payment ရွေး'],
+  ['topupConfirm', '➕ Top Up — Confirm မေး'],
+  ['topupEditWhat', '➕ Top Up — Edit ရွေး'],
+  ['receiptPrompt', '➕ Top Up — Receipt တောင်း'],
+  ['receiptProcessing', '➕ Top Up — Receipt စစ်နေ'],
+  ['topupSuccess', '➕ Top Up — တင်ပြီး'],
+  ['receiptFailed', '➕ Top Up — Receipt မအောင်'],
+  ['topupExpired', '➕ Top Up — Session ကုန်'],
+  ['topupRateLimited', '➕ Top Up — တောင်းဆိုမှုများ'],
+  ['sessionWarning', '⏰ Top Up — 2 မိနစ်ပဲကျန်'],
+  ['topupApproved', '✅ Top Up — Admin Confirm'],
+  ['topupRejected', '❌ Top Up — Admin Reject'],
+  ['topupUpdate', '🔔 Top Up — Update'],
+  ['lowBalance', '⚠️ Wallet လက်ကျန်နည်း'],
+  ['faqTitle', '❓ FAQ — ခေါင်းစဉ်'],
+  ['faq_topup_a', '❓ FAQ — ငွေသွင်းနည်း (အဖြေ)'],
+  ['faq_delivery_a', '❓ FAQ — ပို့ချိန် (အဖြေ)'],
+  ['faq_refund_a', '❓ FAQ — Order မအောင်မြင်ရင် (အဖြေ)'],
+  ['faq_account_a', '❓ FAQ — Account လုံခြုံရေး (အဖြေ)'],
+  ['trackPrompt', '🔍 Track Order — ID တောင်း'],
+  ['trackNotFound', '🔍 Track Order — မတွေ့'],
+  ['orderSuccess', '📦 Order — Success'],
+  ['orderFailed', '📦 Order — Failed'],
+  ['orderProcessing', '📦 Order — Processing'],
+  ['orderUpdate', '📦 Order — Update'],
+  ['connected', '🔗 Telegram Connected'],
+];
+const ADMIN_TEXT_PAGE = 8;
+const ADMIN_BTN_PAGE = 10;
+
+const ADMIN_GUIDE = [
+  '📖 <b>Guide 1/2 — Texts (စာများ)</b>\n\n' +
+  '<b>ပြင်ပုံ</b>\n' +
+  '1. /manage → 📝 Texts → ပြင်ချင်တဲ့စာကို ရွေး\n' +
+  '2. 📝 Edit text ကိုနှိပ် → စာအသစ်ကို ဒီ chat မှာ ပို့\n' +
+  '3. Bot က စစ်ပြီး သိမ်းမယ် — Customer ဆီမှာ ~30 စက္ကန့်အတွင်း ပြောင်းပါမယ်\n\n' +
+  '<b>ဖော်မတ်</b> (Telegram ထဲမှာ စာကို select လုပ်ပြီး ဖော်မတ်လုပ်ပါ)\n' +
+  '• Bold, Italic, Underline, Strikethrough, Spoiler, Code\n' +
+  '• Quote (Blockquote) / Expandable quote\n' +
+  '• Link\n' +
+  '• Premium emoji (Telegram Premium account လိုပါတယ်)\n\n' +
+  '<b>Premium မရှိရင်</b> — <code>html:</code> နဲ့ စရေးပါ\n' +
+  '<pre>html: &lt;b&gt;ခေါင်းစဉ်&lt;/b&gt;\n&lt;blockquote&gt;Quote စာ&lt;/blockquote&gt;\n&lt;tg-emoji emoji-id="5368324170671202286"&gt;🔥&lt;/tg-emoji&gt;</pre>\n' +
+  '<b>Placeholders</b> — <code>{name}</code> <code>{balance}</code> စတာတွေကို စာထဲ ထည့်ရေးရင် Customer ဆီမှာ တန်ဖိုးအစစ်နဲ့ အစားထိုးပေးပါတယ်။ စာတစ်ခုချင်းစီရဲ့ Placeholders ကို Edit စာမျက်နှာမှာ ပြထားပါတယ်။\n\n' +
+  '<b>အခြား</b>\n' +
+  '• 👁 Preview — Customer မြင်ရမယ့်ပုံစံ စမ်းကြည့်\n' +
+  '• ♻️ Reset — Default ပြန်ထား\n' +
+  '• 🌐 my / en — ဘာသာစကားတစ်ခုချင်း ပြင်နိုင်\n' +
+  '• /cancel — ပြင်နေတာ ရပ်',
+  '📖 <b>Guide 2/2 — Buttons (ခလုတ်များ)</b>\n\n' +
+  '<b>အမျိုးအစား ၂ မျိုး</b>\n' +
+  '⌨️ Keyboard — chat အောက်ခြေက Menu (Game List, My Wallet…)\n' +
+  '💬 Message buttons — စာတွေအောက်က ခလုတ် (Top Up Wallet, FAQ, Back…)\n\n' +
+  '<b>ပြင်ပုံ</b>\n' +
+  '/manage → 🔘 Buttons → အမျိုးအစားရွေး → ခလုတ်ရွေး\n' +
+  '• 🏷 Edit label — နာမည်အသစ်ပို့ပါ\n' +
+  '• 🎨 Premium emoji — Premium emoji တစ်ခုပို့ပါ (သို့) emoji ID နံပါတ်ရိုက်ပါ၊ ဖျက်ချင်ရင် <code>-</code>\n' +
+  '• 🔗 Edit URL — Contact Support လို link ခလုတ်အတွက်\n' +
+  '• 🙈 Hide / 👁 Show — ခလုတ်ကို ဖျောက်/ပြန်ပြ\n' +
+  '• ♻️ Reset — Default ပြန်ထား\n\n' +
+  '<b>Tips</b>\n' +
+  '• Label ပို့တဲ့အခါ အရှေ့ဆုံးမှာ Premium emoji တစ်ခုထည့်ပို့ရင် icon အဖြစ် အလိုအလျောက်ယူပါတယ်\n' +
+  '• Premium emoji icon သုံးရင် label ထဲက ပုံမှန် emoji ကို ဖယ်ပါ\n' +
+  '• Keyboard အသစ်ကို Customer အားလုံးဆီ ချက်ချင်းပို့ချင်ရင် 📤 Push Menu\n' +
+  '• Game နာမည်၊ Payment method၊ Order စာရင်းခလုတ်တွေက data ကနေ အလိုအလျောက်လာတာမို့ admin.html ကနေပဲ ပြင်ရပါတယ်\n' +
+  '• Premium emoji ကို bot က ပြနိုင်/မပြနိုင်က Telegram ရဲ့ စည်းကမ်းပေါ်မူတည်ပါတယ်။ မပေါ်ရင် 👁 Preview မှာ စစ်ကြည့်ပါ',
+];
+
+function adminHomeText() {
+  return '🛠 <b>PCA Store Bot Manager</b>\n\nCustomer တွေမြင်ရတဲ့ စာတွေ၊ ခလုတ်တွေကို ဒီကနေ ပြင်လို့ရပါတယ်။\nပြင်ချင်တာကို အောက်က ရွေးပါ 👇';
+}
+function adminHomeMarkup() {
+  return {
+    inline_keyboard: [
+      [{ text: '📝 Texts (စာများ)', callback_data: 'adm:tl:0' }, { text: '🔘 Buttons (ခလုတ်များ)', callback_data: 'adm:bmenu' }],
+      [{ text: '📖 Guide (ပြင်နည်း)', callback_data: 'adm:guide:0' }, { text: '📤 Push Menu', callback_data: 'adm:push' }],
+      [{ text: '♻️ Reset All', callback_data: 'adm:resetall' }, { text: '✖️ Close', callback_data: 'adm:close' }],
+    ],
+  };
+}
+const ADMIN_HOME_ROW = [{ text: '⬅️ Manager', callback_data: 'adm:home' }];
+
+async function sendAdminPanel(env, chatId) {
+  return sendTelegramMessage(env, chatId, adminHomeText(), adminHomeMarkup(), 'HTML');
+}
+
+function getTextDefault(key, lang) {
+  const e = MESSAGES[key];
+  return e[lang] || e.my;
+}
+
+function textListView(page) {
+  const pages = Math.ceil(TEXT_LABELS.length / ADMIN_TEXT_PAGE);
+  page = Math.min(Math.max(page, 0), pages - 1);
+  const slice = TEXT_LABELS.slice(page * ADMIN_TEXT_PAGE, (page + 1) * ADMIN_TEXT_PAGE);
+  const rows = slice.map(([key, label]) => {
+    const c = CUSTOM.texts[key];
+    return [{ text: `${c && Object.keys(c).length ? '✏️ ' : ''}${label}`, callback_data: `adm:t:${key}:my` }];
+  });
+  rows.push([
+    { text: '◀️', callback_data: `adm:tl:${Math.max(page - 1, 0)}` },
+    { text: `${page + 1}/${pages}`, callback_data: `adm:tl:${page}` },
+    { text: '▶️', callback_data: `adm:tl:${Math.min(page + 1, pages - 1)}` },
+  ]);
+  rows.push(ADMIN_HOME_ROW);
+  return { text: '📝 <b>Texts (စာများ)</b>\n\nပြင်ချင်တဲ့စာကို ရွေးပါ။ ✏️ = ပြင်ထားပြီးသား', markup: { inline_keyboard: rows } };
+}
+
+function textDetailView(key, lang) {
+  const entry = MESSAGES[key];
+  if (!entry) return null;
+  const langs = Object.keys(entry);
+  const l = langs.includes(lang) ? lang : 'my';
+  const label = (TEXT_LABELS.find((x) => x[0] === key) || [key, key])[1];
+  const custom = CUSTOM.texts[key] && CUSTOM.texts[key][l];
+  const src = (custom || getTextDefault(key, l)).slice(0, 2500);
+  const vars = (MSG_VARS[key] || []).map((v) => `{${v}}`).join(' ') || '—';
+  const text =
+    `📝 <b>${escapeHtml(label)}</b>\nKey: <code>${key}</code> · ဘာသာ: <b>${l}</b>\n` +
+    `အခြေအနေ: ${custom ? '✏️ ပြင်ထားသည်' : 'Default'}\nPlaceholders: <code>${escapeHtml(vars)}</code>\n\n` +
+    `${custom ? 'HTML source' : 'Default'}:\n<pre>${escapeHtml(src)}</pre>`;
+  const rows = [
+    [{ text: '📝 Edit text', callback_data: `adm:te:${key}:${l}` }, { text: '👁 Preview', callback_data: `adm:tp:${key}:${l}` }],
+  ];
+  if (custom) rows.push([{ text: '♻️ Reset', callback_data: `adm:tr:${key}:${l}` }]);
+  if (langs.length > 1) {
+    rows.push(langs.map((x) => ({ text: `${x === l ? '✅ ' : '🌐 '}${x}`, callback_data: `adm:t:${key}:${x}` })));
+  }
+  const idx = TEXT_LABELS.findIndex((x) => x[0] === key);
+  rows.push([{ text: '⬅️ List', callback_data: `adm:tl:${Math.max(0, Math.floor(idx / ADMIN_TEXT_PAGE))}` }]);
+  return { text, markup: { inline_keyboard: rows } };
+}
+
+function buttonMenuView() {
+  return {
+    text: '🔘 <b>Buttons (ခလုတ်များ)</b>\n\nဘယ်အမျိုးအစားကို ပြင်မလဲ?',
+    markup: {
+      inline_keyboard: [
+        [{ text: '⌨️ Keyboard (အောက်ခြေ Menu)', callback_data: 'adm:blk' }],
+        [{ text: '💬 Message buttons (စာအောက်ခလုတ်)', callback_data: 'adm:bli:0' }],
+        ADMIN_HOME_ROW,
+      ],
+    },
+  };
+}
+
+function buttonListView(kind, page) {
+  const items = BUTTON_CATALOG.filter((c) => c.kind === kind);
+  const pages = Math.max(1, Math.ceil(items.length / ADMIN_BTN_PAGE));
+  page = Math.min(Math.max(page, 0), pages - 1);
+  const slice = items.slice(page * ADMIN_BTN_PAGE, (page + 1) * ADMIN_BTN_PAGE);
+  const rows = slice.map((c) => {
+    const ov = CUSTOM.buttons[c.id];
+    const mark = ov ? (ov.hidden ? '🙈 ' : '✏️ ') : '';
+    return [{ text: `${mark}${(ov && ov.label) || c.def}`, callback_data: `adm:bd:${c.id}` }];
+  });
+  const navBase = kind === 'kb' ? 'adm:blk' : 'adm:bli';
+  if (pages > 1) {
+    rows.push([
+      { text: '◀️', callback_data: `${navBase}:${Math.max(page - 1, 0)}` },
+      { text: `${page + 1}/${pages}`, callback_data: `${navBase}:${page}` },
+      { text: '▶️', callback_data: `${navBase}:${Math.min(page + 1, pages - 1)}` },
+    ]);
+  }
+  rows.push([{ text: '⬅️ Buttons', callback_data: 'adm:bmenu' }]);
+  return {
+    text: `${kind === 'kb' ? '⌨️ <b>Keyboard buttons</b>' : '💬 <b>Message buttons</b>'}\n\nပြင်ချင်တဲ့ခလုတ်ကို ရွေးပါ။ ✏️ = ပြင်ထား · 🙈 = ဖျောက်ထား`,
+    markup: { inline_keyboard: rows },
+  };
+}
+
+function buttonDetailView(id) {
+  const c = findButton(id);
+  if (!c) return null;
+  const ov = CUSTOM.buttons[id] || {};
+  let text =
+    `🔘 <b>${escapeHtml(c.name)}</b> (${c.kind === 'kb' ? 'Keyboard' : 'Message button'})\n\n` +
+    `Default: <code>${escapeHtml(c.def)}</code>\n` +
+    `Label: <code>${escapeHtml(ov.label || '—')}</code>\n` +
+    `Premium emoji ID: <code>${escapeHtml(ov.icon || '—')}</code>\n`;
+  if (c.hasUrl) text += `URL: <code>${escapeHtml(ov.url || 'default')}</code>\n`;
+  text += `ဖျောက်ထားလား: ${ov.hidden ? 'ဟုတ်' : 'မဟုတ်'}`;
+  if (c.keep) text += '\n\n<i>ဒီခလုတ်က flow အတွက် လိုအပ်လို့ ဖျောက်လို့မရပါ (label/emoji ပဲ ပြင်နိုင်)</i>';
+  const rows = [[{ text: '🏷 Edit label', callback_data: `adm:bel:${id}` }, { text: '🎨 Premium emoji', callback_data: `adm:bei:${id}` }]];
+  if (c.hasUrl) rows.push([{ text: '🔗 Edit URL', callback_data: `adm:beu:${id}` }]);
+  const second = [];
+  if (!c.keep) second.push({ text: ov.hidden ? '👁 Show' : '🙈 Hide', callback_data: `adm:bh:${id}` });
+  if (CUSTOM.buttons[id]) second.push({ text: '♻️ Reset', callback_data: `adm:br:${id}` });
+  if (second.length) rows.push(second);
+  if (c.kind === 'kb') rows.push([{ text: '⬅️ List', callback_data: 'adm:blk:0' }]);
+  else {
+    const idx = BUTTON_CATALOG.filter((x) => x.kind === 'in').findIndex((x) => x.id === id);
+    rows.push([{ text: '⬅️ List', callback_data: `adm:bli:${Math.max(0, Math.floor(idx / ADMIN_BTN_PAGE))}` }]);
+  }
+  return { text, markup: { inline_keyboard: rows } };
+}
+
+function stopMarkup() {
+  return { inline_keyboard: [[{ text: '✖️ Stop', callback_data: 'adm:stop' }]] };
+}
+
+async function handleAdminCallback(env, cq, ctx) {
+  const telegramId = String(cq.from.id);
+  if (!isAdmin(env, telegramId)) return; // silent for non-admins
+  const chatId = cq.message && cq.message.chat && cq.message.chat.id;
+  const messageId = cq.message && cq.message.message_id;
+  if (!chatId || !messageId) return;
+  await loadCustom(env, true);
+  const parts = (cq.data || '').split(':');
+  const act = parts[1];
+  const a = parts[2];
+  const b = parts[3];
+  const edit = (text, markup) => editTelegramMessage(env, chatId, messageId, text, markup, 'HTML');
+  const send = (text, markup) => sendTelegramMessage(env, chatId, text, markup, 'HTML');
+  const showText = async (key, lang) => { const v = textDetailView(key, lang); if (v) await edit(v.text, v.markup); };
+  const showBtn = async (id) => { const v = buttonDetailView(id); if (v) await edit(v.text, v.markup); };
+
+  try {
+    switch (act) {
+      case 'home':
+        await clearBotSession(env, telegramId);
+        return edit(adminHomeText(), adminHomeMarkup());
+      case 'close':
+        await clearBotSession(env, telegramId);
+        return edit('✅ Manager ပိတ်လိုက်ပါပြီ။ ပြန်ဖွင့်ချင်ရင် /manage ရိုက်ပါ။', null);
+      case 'stop':
+        await clearBotSession(env, telegramId);
+        return edit('✖️ ရပ်လိုက်ပါပြီ။', { inline_keyboard: [ADMIN_HOME_ROW] });
+      case 'guide': {
+        const i = a === '1' ? 1 : 0;
+        return edit(ADMIN_GUIDE[i], {
+          inline_keyboard: [[
+            { text: i === 0 ? '▶️ Guide 2' : '◀️ Guide 1', callback_data: `adm:guide:${i === 0 ? 1 : 0}` },
+            ADMIN_HOME_ROW[0],
+          ]],
+        });
+      }
+      case 'tl': { const v = textListView(parseInt(a, 10) || 0); return edit(v.text, v.markup); }
+      case 't': return showText(a, b);
+      case 'te': {
+        if (!MESSAGES[a]) return;
+        const lang = b === 'en' && MESSAGES[a].en ? 'en' : 'my';
+        await setBotSession(env, telegramId, { step: 'admin_text', adminKey: a, adminLang: lang });
+        const label = (TEXT_LABELS.find((x) => x[0] === a) || [a, a])[1];
+        const vars = (MSG_VARS[a] || []).map((v) => `{${v}}`).join(' ') || '—';
+        return send(
+          `✏️ <b>${escapeHtml(label)}</b> (${lang})\n\nစာအသစ်ကို ဒီ chat မှာ ပို့ပါ။\n` +
+          '• Bold / Italic / Quote / Link / Premium emoji တွေကို Telegram ထဲမှာ ဖော်မတ်လုပ်ပြီး ပို့လို့ရပါတယ်\n' +
+          '• Premium မရှိရင် <code>html:</code> နဲ့စပြီး HTML ရေးပါ\n' +
+          `• Placeholders: <code>${escapeHtml(vars)}</code>\n\n/cancel နဲ့လည်း ရပ်နိုင်ပါတယ်`,
+          stopMarkup()
+        );
+      }
+      case 'tp': {
+        if (!MESSAGES[a]) return;
+        const lang = b === 'en' && MESSAGES[a].en ? 'en' : 'my';
+        const sent = await sendTelegramMessageChecked(env, chatId, t(lang, a, sampleVarsFor(a)));
+        if (!sent.ok) await send(`❌ Preview ပို့မရပါ: <code>${escapeHtml(sent.description || 'unknown error')}</code>`);
+        return;
+      }
+      case 'tr': {
+        const lang = b === 'en' ? 'en' : 'my';
+        if (CUSTOM.texts[a]) {
+          delete CUSTOM.texts[a][lang];
+          if (!Object.keys(CUSTOM.texts[a]).length) delete CUSTOM.texts[a];
+          await saveCustom(env);
+        }
+        return showText(a, lang);
+      }
+      case 'bmenu': { const v = buttonMenuView(); return edit(v.text, v.markup); }
+      case 'blk': { const v = buttonListView('kb', 0); return edit(v.text, v.markup); }
+      case 'bli': { const v = buttonListView('in', parseInt(a, 10) || 0); return edit(v.text, v.markup); }
+      case 'bd': return showBtn(a);
+      case 'bel':
+      case 'bei':
+      case 'beu': {
+        const c = findButton(a);
+        if (!c || (act === 'beu' && !c.hasUrl)) return;
+        const step = act === 'bel' ? 'admin_btn_label' : act === 'bei' ? 'admin_btn_icon' : 'admin_btn_url';
+        await setBotSession(env, telegramId, { step, adminKey: a });
+        const prompts = {
+          admin_btn_label:
+            `🏷 <b>${escapeHtml(c.name)}</b> — label အသစ်ကို ပို့ပါ။\n\nPremium emoji ကို အရှေ့ဆုံးမှာ ထည့်ပို့ရင် icon အဖြစ် အလိုအလျောက်ယူပါမယ်။\nDefault ပြန်ထားချင်ရင် <code>-</code> ပို့ပါ။`,
+          admin_btn_icon:
+            `🎨 <b>${escapeHtml(c.name)}</b> — Premium emoji တစ်ခု ပို့ပါ (သို့) emoji ID နံပါတ် ရိုက်ပါ။\n\nဖျက်ချင်ရင် <code>-</code> ပို့ပါ။`,
+          admin_btn_url:
+            `🔗 <b>${escapeHtml(c.name)}</b> — URL အသစ်ကို ပို့ပါ (https://… သို့ tg://…)။\n\nDefault ပြန်ထားချင်ရင် <code>-</code> ပို့ပါ။`,
+        };
+        return send(prompts[step], stopMarkup());
+      }
+      case 'bh': {
+        const c = findButton(a);
+        if (!c || c.keep) return;
+        const ov = (CUSTOM.buttons[a] = CUSTOM.buttons[a] || {});
+        if (ov.hidden) delete ov.hidden; else ov.hidden = true;
+        if (!Object.keys(ov).length) delete CUSTOM.buttons[a];
+        await saveCustom(env);
+        return showBtn(a);
+      }
+      case 'br':
+        delete CUSTOM.buttons[a];
+        await saveCustom(env);
+        return showBtn(a);
+      case 'push': {
+        const n = (await listBotUserChatIds(env)).length;
+        return edit(`📤 <b>Push Menu</b>\n\nMenu/Keyboard အသစ်ကို bot user <b>${n}</b> ယောက်ဆီ ပို့မလား?\n(စာတိုတစ်ခုနဲ့အတူ keyboard အသစ် ရောက်သွားပါမယ်)`, {
+          inline_keyboard: [[{ text: '✅ Send', callback_data: 'adm:pushgo' }], ADMIN_HOME_ROW],
+        });
+      }
+      case 'pushgo': {
+        const recipients = await listBotUserChatIds(env);
+        const task = broadcastToUsers(env, recipients, t('my', 'menuUpdated'), MAIN_KEYBOARD);
+        if (ctx && typeof ctx.waitUntil === 'function') ctx.waitUntil(task); else await task;
+        return edit(`📤 ${recipients.length} ယောက်ဆီ ပို့နေပါပြီ။`, { inline_keyboard: [ADMIN_HOME_ROW] });
+      }
+      case 'resetall':
+        return edit('♻️ <b>Reset All</b>\n\nပြင်ထားသမျှ စာတွေ၊ ခလုတ်တွေ အားလုံးကို Default ပြန်ထားမလား?', {
+          inline_keyboard: [[{ text: '✅ Yes, reset', callback_data: 'adm:resetgo' }], ADMIN_HOME_ROW],
+        });
+      case 'resetgo':
+        CUSTOM = { texts: {}, buttons: {} };
+        await saveCustom(env);
+        return edit('✅ Default ပြန်ထားပြီးပါပြီ။', { inline_keyboard: [ADMIN_HOME_ROW] });
+      default:
+        return;
+    }
+  } catch (e) {
+    console.error('handleAdminCallback failed:', e);
+    return send(`❌ Error: <code>${escapeHtml(e && e.message ? e.message : String(e))}</code>`);
+  }
+}
+
+// Handles the admin's next message while a /manage edit is in progress.
+async function handleAdminInput(env, chatId, telegramId, msg, session) {
+  await loadCustom(env, true);
+  const raw = msg.text || '';
+  const entities = msg.entities || [];
+  const step = session.step;
+  const send = (text, markup) => sendTelegramMessage(env, chatId, text, markup, 'HTML');
+  const fail = (m) => send(`❌ ${m}`);
+
+  try {
+    if (step === 'admin_text') {
+      const key = session.adminKey;
+      const lang = session.adminLang === 'en' ? 'en' : 'my';
+      if (!MESSAGES[key]) { await clearBotSession(env, telegramId); return fail('Key မတွေ့ပါ။ /manage ကနေ ပြန်စပါ။'); }
+      const trimmed = raw.trim();
+      const html = /^html:/i.test(trimmed) ? trimmed.replace(/^html:\s*/i, '') : entitiesToHtml(raw, entities).trim();
+      if (!html) return fail('စာအလွတ်ဖြစ်နေပါတယ်။ စာအသစ် ပို့ပါ။');
+      // The probe message doubles as the preview the admin sees.
+      const probe = await sendTelegramMessageChecked(env, chatId, HTML_MARK + fillVars(html, sampleVarsFor(key), true));
+      if (!probe.ok) {
+        return fail(`Telegram က ဒီစာကို လက်မခံပါ — HTML tag တွေ ပြန်စစ်ပြီး ထပ်ပို့ပါ။\n<code>${escapeHtml(probe.description || '')}</code>`);
+      }
+      CUSTOM.texts[key] = { ...(CUSTOM.texts[key] || {}), [lang]: html };
+      await saveCustom(env);
+      await clearBotSession(env, telegramId);
+      const v = textDetailView(key, lang);
+      return send('✅ သိမ်းပြီးပါပြီ (အပေါ်က စာက Preview ပါ)\n\n' + v.text, v.markup);
+    }
+
+    const id = session.adminKey;
+    const c = findButton(id);
+    if (!c) { await clearBotSession(env, telegramId); return fail('ခလုတ်မတွေ့ပါ။ /manage ကနေ ပြန်စပါ။'); }
+    const ov = () => (CUSTOM.buttons[id] = CUSTOM.buttons[id] || {});
+    const prune = () => { if (CUSTOM.buttons[id] && !Object.keys(CUSTOM.buttons[id]).length) delete CUSTOM.buttons[id]; };
+    const done = async (note) => {
+      await saveCustom(env);
+      await clearBotSession(env, telegramId);
+      const v = buttonDetailView(id);
+      return send(`✅ ${note}\n\n` + v.text + '\n\n<i>Keyboard အသစ်ကို Customer ဆီ ချက်ချင်းရောက်စေချင်ရင် 📤 Push Menu သုံးပါ။</i>', v.markup);
+    };
+    const trimmed = raw.trim();
+
+    if (step === 'admin_btn_label') {
+      if (trimmed === '-') { if (CUSTOM.buttons[id]) { delete CUSTOM.buttons[id].label; delete CUSTOM.buttons[id].icon; } prune(); return done('Label ကို Default ပြန်ထားပြီး'); }
+      let label = trimmed;
+      let icon;
+      const lead = raw.length - raw.trimStart().length;
+      const ce = entities.find((e) => e.type === 'custom_emoji' && e.offset === lead);
+      if (ce) { icon = ce.custom_emoji_id; label = raw.slice(lead + ce.length).trim(); }
+      if (!label) label = c.def.replace(/^[^\p{L}\p{N}]+/u, '').trim() || c.def;
+      if (label.length > 60) return fail('Label ရှည်လွန်းပါတယ် (60 လုံးအောက်)။');
+      ov().label = label;
+      if (icon) ov().icon = icon;
+      return done('Label သိမ်းပြီး');
+    }
+    if (step === 'admin_btn_icon') {
+      if (trimmed === '-' || trimmed.toLowerCase() === 'none') { if (CUSTOM.buttons[id]) delete CUSTOM.buttons[id].icon; prune(); return done('Premium emoji ဖျက်ပြီး'); }
+      const ce = entities.find((e) => e.type === 'custom_emoji');
+      const icon = ce ? ce.custom_emoji_id : /^\d{5,}$/.test(trimmed) ? trimmed : '';
+      if (!icon) return fail('Premium emoji တစ်ခု ပို့ပါ (သို့) emoji ID နံပါတ် ရိုက်ပါ။ ဖျက်ချင်ရင် - ');
+      ov().icon = icon;
+      return done(`Premium emoji သိမ်းပြီး (ID: ${icon})`);
+    }
+    if (step === 'admin_btn_url') {
+      if (trimmed === '-') { if (CUSTOM.buttons[id]) delete CUSTOM.buttons[id].url; prune(); return done('URL ကို Default ပြန်ထားပြီး'); }
+      if (!/^(https?:\/\/|tg:\/\/)\S+$/i.test(trimmed)) return fail('URL က https:// (သို့) tg:// နဲ့ စရပါမယ်။');
+      ov().url = trimmed;
+      return done('URL သိမ်းပြီး');
+    }
+    await clearBotSession(env, telegramId);
+  } catch (e) {
+    console.error('handleAdminInput failed:', e);
+    return fail(`Error: <code>${escapeHtml(e && e.message ? e.message : String(e))}</code>`);
+  }
 }
 
 // Shared by the /language command and the "🌐 Language" keyboard button
@@ -618,7 +1390,15 @@ async function sendLanguagePicker(env, chatId, telegramId) {
 async function routeTelegramMessage(env, msg) {
   const chatId = msg.chat.id;
   const telegramId = String(msg.from.id);
-  const text = (msg.text || '').trim();
+  let text = kbNormalize((msg.text || '').trim());
+
+  // Admin-only control panel. Non-admins get NO reply at all.
+  if (text === '/manage' || text.startsWith('/manage@') || text.startsWith('/manage ')) {
+    if (!isAdmin(env, telegramId)) return;
+    await clearBotSession(env, telegramId);
+    await loadCustom(env, true);
+    return sendAdminPanel(env, chatId);
+  }
 
   if (text === '/cancel') {
     await clearBotSession(env, telegramId);
@@ -643,6 +1423,9 @@ async function routeTelegramMessage(env, msg) {
   // (typing an amount, or about to pick a payment method), so route them
   // there first instead of falling through to the menu matching below.
   const session = await getBotSession(env, telegramId);
+  if (session && typeof session.step === 'string' && session.step.startsWith('admin_') && isAdmin(env, telegramId)) {
+    return handleAdminInput(env, chatId, telegramId, msg, session);
+  }
   if (session && session.step === 'awaiting_amount' && text) {
     if (MAIN_MENU_TEXTS.has(text)) {
       await clearBotSession(env, telegramId);
@@ -692,11 +1475,11 @@ async function routeTelegramMessage(env, msg) {
     return sendTelegramMessage(
       env, chatId,
       t(lang, 'wallet', Number(acct.walletBalance || 0).toLocaleString()),
-      { inline_keyboard: [[{ text: '➕ Top Up Wallet', style: 'success', callback_data: 'wallet:topup' }]] }
+      { inline_keyboard: [[{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }]] }
     );
   }
   if (text === '👤 My Account') {
-    return sendTelegramMessage(env, chatId, t(lang, 'account', acct), MAIN_KEYBOARD);
+    return sendTelegramMessage(env, chatId, t(lang, 'account', { id: acct.guestId, name: acct.name || '-', wallet: Number(acct.walletBalance || 0).toLocaleString() }), MAIN_KEYBOARD);
   }
   if (text === '📦 My Orders') {
     return sendMyOrdersList(env, chatId, acct, lang);
@@ -735,19 +1518,19 @@ async function routeTelegramMessage(env, msg) {
 async function handleTopupAmount(env, chatId, telegramId, text) {
   const amount = Number(String(text).replace(/[^0-9.]/g, ''));
   if (!amount || amount <= 0) {
-    return sendTelegramMessage(env, chatId, 'ပမာဏကို ဂဏန်းနဲ့ ရိုက်ထည့်ပါ (ဥပမာ - 10000)။', cancelInlineKeyboard(topupAmountRows(1)));
+    return sendTelegramMessage(env, chatId, t('my', 'topupAmountInvalid'), cancelInlineKeyboard(topupAmountRows(1)));
   }
   if (amount < WALLET_TOPUP_MIN) {
-    return sendTelegramMessage(env, chatId, `အနည်းဆုံး ${WALLET_TOPUP_MIN.toLocaleString()} MMK ဖြစ်ရပါမယ်။`, cancelInlineKeyboard(topupAmountRows(1)));
+    return sendTelegramMessage(env, chatId, t('my', 'topupAmountMin', { min: WALLET_TOPUP_MIN.toLocaleString() }), cancelInlineKeyboard(topupAmountRows(1)));
   }
   if (amount > WALLET_TOPUP_MAX) {
-    return sendTelegramMessage(env, chatId, `အများဆုံး ${WALLET_TOPUP_MAX.toLocaleString()} MMK ဖြစ်ရပါမယ်။`, cancelInlineKeyboard(topupAmountRows(1)));
+    return sendTelegramMessage(env, chatId, t('my', 'topupAmountMax', { max: WALLET_TOPUP_MAX.toLocaleString() }), cancelInlineKeyboard(topupAmountRows(1)));
   }
 
   const methods = await listPaymentMethods(env);
   if (!methods.length) {
     await clearBotSession(env, telegramId);
-    return sendTelegramMessage(env, chatId, 'Payment method များ ခေတ္တမရနိုင်ပါ။ PCA Store app ထဲက Wallet ကနေ ဖြည့်ကြည့်ပါ။', openAppInlineKeyboard());
+    return sendTelegramMessage(env, chatId, t('my', 'noPaymentMethods'), openAppInlineKeyboard());
   }
 
   await setBotSession(env, telegramId, { step: 'awaiting_method', amount });
@@ -763,7 +1546,7 @@ async function sendPaymentMethodPicker(env, chatId, telegramId, amount) {
   const methods = await listPaymentMethods(env);
   if (!methods.length) {
     await clearBotSession(env, telegramId);
-    return sendTelegramMessage(env, chatId, 'Payment method များ ခေတ္တမရနိုင်ပါ။ PCA Store app ထဲက Wallet ကနေ ဖြည့်ကြည့်ပါ။', openAppInlineKeyboard());
+    return sendTelegramMessage(env, chatId, t('my', 'noPaymentMethods'), openAppInlineKeyboard());
   }
 
   const lastMethod = await getLastPaymentMethod(env, telegramId);
@@ -775,7 +1558,7 @@ async function sendPaymentMethodPicker(env, chatId, telegramId, amount) {
     ? [...methods].sort((a, b) => (a.id === lastMethod.id ? -1 : b.id === lastMethod.id ? 1 : 0))
     : methods;
 
-  return sendTelegramMessage(env, chatId, `ပမာဏ: ${amount.toLocaleString()} MMK\n\nငွေပေးချေမှု နည်းလမ်း ရွေးချယ်ပါ:`, cancelInlineKeyboard(
+  return sendTelegramMessage(env, chatId, t('my', 'pickMethod', { amount: amount.toLocaleString() }), cancelInlineKeyboard(
     sorted.map((m) => [
       { text: lastMethod && m.id === lastMethod.id ? `⭐ ${m.name} (နောက်ဆုံးသုံး)` : m.name, callback_data: `topup_pm:${m.id}` },
     ])
@@ -790,26 +1573,10 @@ async function sendPaymentMethodPicker(env, chatId, telegramId, amount) {
 // needs to change to add/remove a question.
 // ---------------------------------------------------------------------------
 const FAQ_ITEMS = [
-  {
-    id: 'topup',
-    q: '💰 ငွေသွင်းနည်း',
-    a: '💼 My Wallet ကိုနှိပ်ပြီး ➕ Top Up Wallet ခလုတ်ကို နှိပ်ကာ ပမာဏရိုက်ထည့်ပါ → ငွေပေးချေမှု နည်းလမ်း ရွေးပါ → Receipt ဓာတ်ပုံ ပို့ပါ။ Admin စစ်ဆေးပြီးသည်နှင့် Wallet ထဲ ချက်ချင်း ပေါင်းပေးပါလိမ့်မယ်။',
-  },
-  {
-    id: 'delivery',
-    q: '⏱️ ပို့ချိန်',
-    a: 'ပုံမှန်အားဖြင့် မိနစ် 5-30 အတွင်း ပို့ဆောင်ပေးပါတယ်။ Order Status ကို 📦 My Orders (သို့) 🔍 Track my order ကနေ အချိန်မရွေး စစ်ကြည့်နိုင်ပါတယ်။',
-  },
-  {
-    id: 'refund',
-    q: '↩️ Order မအောင်မြင်ရင်',
-    a: 'Order Fail ဖြစ်ရင် Wallet ထဲ ငွေပြန်အမ်းပေးပါတယ်။ ကြာချိန်ကြာလွန်းနေရင် (သို့) ပြဿနာရှိရင် 💬 Contact Support ကို ဆက်သွယ်ပေးပါ။',
-  },
-  {
-    id: 'account',
-    q: '🔒 Account လုံခြုံရေး',
-    a: 'Telegram Account ကို တစ်ကြိမ်တည်း ချိတ်ဆက်ပြီးရင် တခြားသူက ပြန်ချိတ်လို့ မရတော့ပါ။ Wallet ထဲ ငွေရှိပြီးသား Account ကို ပြောင်းချိတ်ဖို့ လိုရင် Admin ကို ဆက်သွယ် verify ပြုလုပ်ရပါမယ်။',
-  },
+  { id: 'topup', q: '💰 ငွေသွင်းနည်း' },
+  { id: 'delivery', q: '⏱️ ပို့ချိန်' },
+  { id: 'refund', q: '↩️ Order မအောင်မြင်ရင်' },
+  { id: 'account', q: '🔒 Account လုံခြုံရေး' },
 ];
 
 function faqListMarkup() {
@@ -846,9 +1613,9 @@ async function handleFaqCallback(env, cq) {
 
   const item = FAQ_ITEMS.find((it) => it.id === id);
   if (!item) {
-    return editTelegramMessage(env, chatId, messageId, '❓ FAQ — မေးလေ့ရှိသော မေးခွန်းများ\n\nမေးခွန်းတစ်ခု ရွေးချယ်ပါ:', faqListMarkup());
+    return editTelegramMessage(env, chatId, messageId, t('my', 'faqTitle'), faqListMarkup());
   }
-  return editTelegramMessage(env, chatId, messageId, `${item.q}\n\n${item.a}`, {
+  return editTelegramMessage(env, chatId, messageId, concatMsg(btnLabel('in_faq_' + item.id, item.q), '\n\n', t('my', 'faq_' + item.id + '_a')), {
     inline_keyboard: [[{ text: '🔙 FAQ List', callback_data: 'faq:list' }]],
   });
 }
@@ -869,7 +1636,7 @@ async function handleTrackOrderCallback(env, cq) {
   await setBotSession(env, telegramId, { step: 'awaiting_order_id' });
   return sendTelegramMessage(
     env, chatId,
-    'Order ID ကို ရိုက်ထည့်ပါ (ဥပမာ — 12345 or #12345)။ /cancel ဖြင့် ရပ်နိုင်ပါတယ်။',
+    t('my', 'trackPrompt'),
     MAIN_KEYBOARD
   );
 }
@@ -878,12 +1645,12 @@ async function handleTrackOrderId(env, chatId, telegramId, text) {
   await clearBotSession(env, telegramId);
   const acct = await lookupAccountByTelegramId(env, telegramId);
   if (!acct) {
-    return sendTelegramMessage(env, chatId, 'Account မချိတ်ဆက်ရသေးပါ။ App ထဲက Telegram Login ကို အရင်သုံးပြီး /start ကို ပြန်နှိပ်ပါ။', MAIN_KEYBOARD);
+    return sendTelegramMessage(env, chatId, t('my', 'notConnected'), MAIN_KEYBOARD);
   }
   const orderId = text.trim().replace(/^#/, '');
   const order = await lookupOrderById(env, orderId);
   if (!order || order.userId !== acct.guestId) {
-    return sendTelegramMessage(env, chatId, `Order #${orderId} ကို မတွေ့ရှိပါ။ Order ID ကို ပြန်စစ်ပြီး ထပ်ကြိုးစားပေးပါ။`, MAIN_KEYBOARD);
+    return sendTelegramMessage(env, chatId, t('my', 'trackNotFound', { id: orderId }), MAIN_KEYBOARD);
   }
   return sendTelegramMessage(env, chatId, buildOrderDetailText(order), MAIN_KEYBOARD);
 }
@@ -908,7 +1675,7 @@ function buildOrdersListMessage(orders, lang) {
   });
   const rows = orders.map((o) => [{ text: `🧾 #${o.id} အသေးစိတ်`, callback_data: `ord:${o.id}` }]);
   return {
-    text: `${t(lang, 'ordersHeader', orders.length)}\n\n${blocks.join('\n\n')}`,
+    text: concatMsg(t(lang, 'ordersHeader', orders.length), '\n\n', blocks.join('\n\n')),
     replyMarkup: { inline_keyboard: rows },
   };
 }
@@ -962,7 +1729,8 @@ async function editOrderDetail(env, chatId, messageId, order, replyMarkup) {
     if (order.receiptUrl) more.push({ type: 'paragraph', text: ['🧾 ', { type: 'url', text: 'Receipt', url: order.receiptUrl }] });
     if (more.length) blocks.push({ type: 'details', summary: '📋 အသေးစိတ်', is_open: true, blocks: more });
     const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
-    if (replyMarkup) payload.reply_markup = replyMarkup;
+    const rmOv = applyButtonOverrides(replyMarkup);
+    if (rmOv) payload.reply_markup = rmOv;
     const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
@@ -1021,6 +1789,9 @@ async function routeTelegramCallback(env, cq, ctx) {
   const chatId = cq.message && cq.message.chat && cq.message.chat.id;
   const telegramId = String(cq.from.id);
   const data = cq.data || '';
+
+  // Admin-only /manage buttons (silently ignored for everyone else).
+  if (data.startsWith('adm:')) return handleAdminCallback(env, cq, ctx);
 
   // Quick-pick amount buttons (see topupAmountRows).
   if (data.startsWith('topup_amt:')) {
@@ -1127,7 +1898,7 @@ async function routeTelegramCallback(env, cq, ctx) {
     await answerCallbackQuery(env, cq.id);
     return sendTelegramMessage(
       env, chatId,
-      `💳 ${session.paymentMethodName}\n\nအကောင့်: ${session.paymentMethodAccountName || '-'}\nနံပါတ်: ${session.paymentMethodNumber || '-'}\n\n${session.amount.toLocaleString()} MMK လွှဲပြီးရင် Receipt screenshot ကို ဒီမှာ ပို့ပါ။`,
+      t('my', 'receiptPrompt', { method: session.paymentMethodName, account: session.paymentMethodAccountName || '-', number: session.paymentMethodNumber || '-', amount: session.amount.toLocaleString() }),
       cancelInlineKeyboard([
         // Native copy buttons (copy_text): one tap copies the payment number / account name.
         paymentCopyRow(session.paymentMethodNumber, session.paymentMethodAccountName),
@@ -1148,7 +1919,7 @@ async function routeTelegramCallback(env, cq, ctx) {
     await answerCallbackQuery(env, cq.id);
     return sendTelegramMessage(
       env, chatId,
-      'ဘာကို ပြင်ချင်ပါသလဲ?',
+      t('my', 'topupEditWhat'),
       cancelInlineKeyboard([
         [{ text: '🔢 Change Amount', callback_data: 'topup_back_amount' }],
         [{ text: '💳 Change Method', callback_data: 'topup_back_method' }],
@@ -1230,7 +2001,7 @@ async function routeTelegramCallback(env, cq, ctx) {
 function sendTopupConfirmPrompt(env, chatId, amount, methodName) {
   return sendTelegramMessage(
     env, chatId,
-    `ပမာဏ: ${amount.toLocaleString()} MMK\n${methodName} ဖြင့် လွှဲမှာ မှန်ပါသလား?`,
+    t('my', 'topupConfirm', { amount: amount.toLocaleString(), method: methodName }),
     cancelInlineKeyboard([
       [{ text: '✅ Confirm', callback_data: 'topup_confirm' }, { text: '✏️ Edit', callback_data: 'topup_edit' }],
     ])
@@ -1317,7 +2088,7 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
     return sendTelegramMessage(env, chatId, t(lang, 'receiptFailed'), {
       inline_keyboard: [
         [{ text: '🔄 ထပ်ကြိုးစားမည်', callback_data: 'topup_retry_receipt' }],
-        [{ text: '❌ Cancel', style: 'danger', callback_data: 'topup_cancel' }],
+        [{ text: '❌ Cancel', callback_data: 'topup_cancel' }],
       ],
     });
   }
@@ -1330,7 +2101,7 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 async function sendGameListCategoryMenu(env, chatId) {
   return sendTelegramMessage(
     env, chatId,
-    '🎮 Game List\n\nဝန်ဆောင်မှု အမျိုးအစား ရွေးချယ်ပါ:',
+    t('my', 'gameListMenu'),
     gameListCategoryMenuMarkup()
   );
 }
@@ -1350,7 +2121,7 @@ const TELEGRAM_MESSAGE_LIMIT = 4096;
 async function sendAvailableGamesCategoryMenu(env, chatId) {
   return sendTelegramMessage(
     env, chatId,
-    '📋 Available Games\n\nဘယ် Category ကြည့်ချင်ပါသလဲ?',
+    t('my', 'availMenu'),
     {
       inline_keyboard: [
         [
@@ -1405,7 +2176,7 @@ async function sendAvailableGamesList(env, chatId, cat) {
     return sendTelegramMessage(env, chatId, `${catLabel} အတွက် ဂိမ်းစာရင်း ခေတ္တမရနိုင်ပါ။`, MAIN_KEYBOARD);
   }
 
-  const header = `📋 ${catLabel} — Available Games (${names.length})\n\nဂိမ်းအမည်ကို နှိပ်ပြီး Copy ယူပါ — ပြီးရင် @pcagamestore_bot ရဲ့ search box ထဲ Paste လုပ်ပြီး တိုက်ရိုက်ရှာနိုင်ပါတယ်:\n\n`;
+  const header = toHtml(t('my', 'availHeader', { cat: catLabel, count: names.length })) + '\n\n';
   const lines = names.map((n) => `<code>${escapeHtml(n)}</code>`);
   const chunks = chunkLinesToMessages(lines, TELEGRAM_MESSAGE_LIMIT - header.length);
 
@@ -1487,7 +2258,7 @@ async function sendOpenAppMessage(env, chatId, messageId, label, gameId, backBut
   const url = `${STORE_URL}?game=${encodeURIComponent(gameId)}`;
   return editTelegramMessage(
     env, chatId, messageId,
-    `🎮 ${label}\n\nအောက်က ခလုတ်ကို နှိပ်ပြီး Store App ထဲမှာ ဖွင့်ပါ:`,
+    t('my', 'openApp', { label }),
     { inline_keyboard: [[{ text: `🚀 ${label} ဖွင့်မည်`, web_app: { url } }], [backButton]] }
   );
 }
@@ -1503,7 +2274,7 @@ async function handleGameListCallback(env, cq) {
 
   if (kind === 'catmenu') {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, '🎮 Game List\n\nဝန်ဆောင်မှု အမျိုးအစား ရွေးချယ်ပါ:', gameListCategoryMenuMarkup());
+    return editTelegramMessage(env, chatId, messageId, t('my', 'gameListMenu'), gameListCategoryMenuMarkup());
   }
 
   // 'genre' and 'c'/'g'/'s' all need the freshly-recomputed group list for
@@ -1512,13 +2283,13 @@ async function handleGameListCallback(env, cq) {
   const cat = parts[2];
   if (cat !== 'topup' && cat !== 'voucher') {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, '🎮 Game List\n\nဝန်ဆောင်မှု အမျိုးအစား ရွေးချယ်ပါ:', gameListCategoryMenuMarkup());
+    return editTelegramMessage(env, chatId, messageId, t('my', 'gameListMenu'), gameListCategoryMenuMarkup());
   }
   const catLabel = GAME_LIST_CATEGORIES[cat];
 
   if (kind === 'genre') {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, `${catLabel}\n\nဂိမ်း Category ရွေးချယ်ပါ:`, buildGenreMenuMarkup(cat));
+    return editTelegramMessage(env, chatId, messageId, t('my', 'genrePrompt', { cat: catLabel }), buildGenreMenuMarkup(cat));
   }
 
   // 'c', 'g' and 's' all carry the selected genre ('all' or a GAME_GENRES
@@ -1530,7 +2301,7 @@ async function handleGameListCallback(env, cq) {
   // silently showing an unfiltered list.
   if (genre !== 'all' && !genreLabel) {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, `${catLabel}\n\nဂိမ်း Category ရွေးချယ်ပါ:`, buildGenreMenuMarkup(cat));
+    return editTelegramMessage(env, chatId, messageId, t('my', 'genrePrompt', { cat: catLabel }), buildGenreMenuMarkup(cat));
   }
   const headerLabel = genreLabel ? `${catLabel} · ${genreLabel.label}` : catLabel;
 
@@ -1540,13 +2311,13 @@ async function handleGameListCallback(env, cq) {
     const [games, flags] = await Promise.all([listGamesRaw(env), getProviderFlags(env)]);
     const groups = buildGameGroupsForCategory(games, flags, cat, genre);
     if (!groups.length) {
-      return editTelegramMessage(env, chatId, messageId, `${headerLabel}\n\nဂိမ်းစာရင်း မရှိသေးပါ။`, {
+      return editTelegramMessage(env, chatId, messageId, t('my', 'noGames', { header: headerLabel }), {
         inline_keyboard: [[{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]],
       });
     }
     return editTelegramMessage(
       env, chatId, messageId,
-      `${headerLabel}\n\nဂိမ်းတစ်ခု ရွေးချယ်ပါ: (${groups.length})`,
+      t('my', 'pickGame', { header: headerLabel, count: groups.length }),
       buildGroupListPage(cat, genre, groups, page)
     );
   }
@@ -1571,7 +2342,7 @@ async function handleGameListCallback(env, cq) {
     // the Mini App opens straight into it.
     const rows = group.servers.map((s, i) => [{ text: s, callback_data: `gl:s:${cat}:${genre}:${page}:${idx}:${i}` }]);
     rows.push([{ text: '🔙 Back', callback_data: `gl:c:${cat}:${genre}:${page}` }]);
-    return editTelegramMessage(env, chatId, messageId, `${group.name}\n\nServer / Region ရွေးချယ်ပါ:`, { inline_keyboard: rows });
+    return editTelegramMessage(env, chatId, messageId, t('my', 'pickServer', { name: group.name }), { inline_keyboard: rows });
   }
 
   if (kind === 's') {
@@ -1809,10 +2580,9 @@ async function answerInlineQuery(env, inlineQueryId, results) {
   }
 }
 
-async function editTelegramMessage(env, chatId, messageId, text, replyMarkup) {
+async function editTelegramMessage(env, chatId, messageId, text, replyMarkup, parseMode) {
   try {
-    const payload = { chat_id: chatId, message_id: messageId, text };
-    if (replyMarkup) payload.reply_markup = replyMarkup;
+    const payload = prepareOutgoing({ chat_id: chatId, message_id: messageId }, text, replyMarkup, parseMode);
     await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1944,6 +2714,8 @@ async function getBotSession(env, telegramId) {
       paymentMethodAccountName: fsField(doc.fields, 'paymentMethodAccountName'),
       lastReceiptFileId: fsField(doc.fields, 'lastReceiptFileId'),
       warned: fsField(doc.fields, 'warned'),
+      adminKey: fsField(doc.fields, 'adminKey'),
+      adminLang: fsField(doc.fields, 'adminLang'),
     };
   } catch (e) {
     console.error('getBotSession failed:', e);
@@ -1972,10 +2744,6 @@ async function clearBotSession(env, telegramId) {
 // this is sent from a scheduled sweep rather than a reply to something the
 // customer just did.
 const SESSION_WARNING_LEAD_MS = 2 * 60 * 1000;
-const SESSION_WARNING_TEXT = {
-  my: '⏰ 2 မိနစ်အတွင်း Top Up flow ကုန်တော့မယ်။ ဆက်လုပ်ချင်ရင် အမြန်ဆက်လုပ်ပါ၊ မဟုတ်ရင် flow ပျက်သွားပြီး 💼 My Wallet ထဲက Top Up Wallet ကနေ ပြန်စရပါမယ်။',
-  en: "⏰ Your top-up flow will expire in 2 minutes. Keep going now, or it'll reset and you'll need to start again from 💼 My Wallet → Top Up Wallet.",
-};
 
 // Every telegramBotSessions doc, straight (paginated, like Firestore's
 // default 300-doc page) — same GET-the-collection pattern as
@@ -2006,10 +2774,11 @@ async function listBotSessionDocs(env) {
 // is called for that user (see the SESSION_TIMEOUT_MS check up there).
 async function warnExpiringTopupSessions(env, ctx) {
   try {
+    await loadCustom(env);
     const sessions = await listBotSessionDocs(env);
     const now = Date.now();
     for (const s of sessions) {
-      if (!s.step || s.warned || !(s.updatedAt instanceof Date)) continue;
+      if (!s.step || s.warned || !String(s.step).startsWith('awaiting_') || !(s.updatedAt instanceof Date)) continue;
       const ageMs = now - s.updatedAt.getTime();
       const msLeft = SESSION_TIMEOUT_MS - ageMs;
       if (msLeft <= 0 || msLeft > SESSION_WARNING_LEAD_MS) continue; // not expired, but not in the warning window either
@@ -2019,7 +2788,7 @@ async function warnExpiringTopupSessions(env, ctx) {
         // For a 1:1 bot chat, chat_id === the user's own Telegram id — same
         // assumption already used by /notify-order-status elsewhere in this
         // file, so no extra chatId lookup is needed here.
-        await sendTelegramMessage(env, s.telegramId, SESSION_WARNING_TEXT[lang] || SESSION_WARNING_TEXT.my);
+        await sendTelegramMessage(env, s.telegramId, t(lang, 'sessionWarning'));
         await fsMergeDoc(env, `telegramBotSessions/${s.telegramId}`, { warned: true });
       } catch (e) {
         // One customer's failed warning shouldn't stop the rest of the sweep.
@@ -2286,9 +3055,7 @@ async function fsDeleteDoc(env, docPath) {
 }
 
 async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
-  const payload = { chat_id: chatId, text };
-  if (replyMarkup) payload.reply_markup = replyMarkup;
-  if (parseMode) payload.parse_mode = parseMode;
+  const payload = prepareOutgoing({ chat_id: chatId }, text, replyMarkup, parseMode);
   try {
     const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -2308,8 +3075,7 @@ async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
 // tell their caller "not delivered" (the caller then retries / skips its
 // "already sent" flag) instead of always answering ok:true.
 async function sendTelegramMessageChecked(env, chatId, text, replyMarkup) {
-  const payload = { chat_id: chatId, text };
-  if (replyMarkup) payload.reply_markup = replyMarkup;
+  const payload = prepareOutgoing({ chat_id: chatId }, text, replyMarkup);
   try {
     const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -2319,7 +3085,7 @@ async function sendTelegramMessageChecked(env, chatId, text, replyMarkup) {
     const data = await res.json().catch(() => ({}));
     if (res.ok) return { ok: true, messageId: data && data.result && data.result.message_id };
     console.error('sendTelegramMessageChecked failed:', res.status, data && data.description);
-    return { ok: false, blocked: data.error_code === 403, status: res.status };
+    return { ok: false, blocked: data.error_code === 403, status: res.status, description: data.description };
   } catch (e) {
     console.error('sendTelegramMessageChecked threw:', e);
     return { ok: false, blocked: false, status: 0 };
@@ -2331,8 +3097,7 @@ async function sendTelegramMessageChecked(env, chatId, text, replyMarkup) {
 // was deleted or is too old to edit.
 async function editTelegramMessageChecked(env, chatId, messageId, text, replyMarkup) {
   try {
-    const payload = { chat_id: chatId, message_id: messageId, text };
-    if (replyMarkup) payload.reply_markup = replyMarkup;
+    const payload = prepareOutgoing({ chat_id: chatId, message_id: messageId }, text, replyMarkup);
     const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2601,19 +3366,10 @@ async function handleNotifyConnected(request, env, corsHeaders) {
     hour12: false,
   }) + ' (Yangon)';
 
-  const text =
-    `✅ Telegram Connected\n\n` +
-    `User ID: ${guestId}\n` +
-    `Name: ${name}\n` +
-    `Balance: ${balance.toLocaleString()} MMK\n` +
-    `Connected Time: ${connectedTime}`;
+  const text = t('my', 'connected', { id: guestId, name, balance: balance.toLocaleString(), time: connectedTime });
 
   try {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: telegramId, text }),
-    });
+    await sendTelegramMessage(env, telegramId, text);
   } catch (e) {
     console.error('notify-connected send failed:', e);
   }
@@ -2739,8 +3495,7 @@ async function broadcastToUsers(env, recipients, text, replyMarkup) {
 
 async function sendBroadcastMessage(env, chatId, text, replyMarkup) {
   try {
-    const payload = { chat_id: chatId, text };
-    if (replyMarkup) payload.reply_markup = replyMarkup;
+    const payload = prepareOutgoing({ chat_id: chatId }, text, replyMarkup);
     const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2950,12 +3705,12 @@ async function handleTopupStatusNotify(request, env, corsHeaders) {
   if (norm === 'completed' || norm === 'success' || norm === 'approved') {
     const acct = await lookupAccountByTelegramId(env, telegramId);
     const balLine = acct ? `\nလက်ကျန်ငွေ: ${Number(acct.walletBalance || 0).toLocaleString()} MMK` : '';
-    text = `✅ Top Up အောင်မြင်ပါပြီ\n\nပမာဏ: ${amountText}${balLine}\n\nWallet ထဲ ပေါင်းထည့်ပြီးပါပြီ။ ကျေးဇူးတင်ပါတယ်!`;
+    text = t('my', 'topupApproved', { amount: amountText, balance: balLine });
   } else if (norm === 'rejected' || norm === 'fail' || norm === 'failed') {
-    text = `❌ Top Up မအောင်မြင်ပါ\n\nပမာဏ: ${amountText}\n\nReceipt (သို့) ငွေလွှဲမှု မှန်ကန်မှုမရှိသဖြင့် ပယ်ချလိုက်ပါသည်။ အသေးစိတ်သိရှိလိုပါက Help Center သို့ ဆက်သွယ်ပါ။`;
+    text = t('my', 'topupRejected', { amount: amountText });
     markup = { inline_keyboard: [[{ text: '💬 Contact Support', url: 'https://t.me/pca_gamestore' }]] };
   } else {
-    text = `🔔 Top Up Update\n\nပမာဏ: ${amountText}\nအခြေအနေ: ${status}`;
+    text = t('my', 'topupUpdate', { amount: amountText, status });
   }
   const sent = await sendTelegramMessageChecked(env, telegramId, text, markup);
   if (!sent.ok) return json({ ok: false, delivered: false, blocked: !!sent.blocked }, sent.blocked ? 200 : 502, corsHeaders);
@@ -2982,7 +3737,7 @@ async function maybeSendLowBalanceAlert(env, telegramId) {
     if (balance > 0 && balance < LOW_BALANCE_THRESHOLD) {
       await sendTelegramMessage(
         env, telegramId,
-        `⚠️ Wallet လက်ကျန် နည်းနေပါပြီ (${balance.toLocaleString()} MMK)။\n\nနောက် Order တင်ရင် ငွေမလုံလောက်ဘဲ ပျက်မသွားအောင် အခုပဲ Top Up လုပ်ထားပါ။`,
+        t('my', 'lowBalance', { balance: balance.toLocaleString() }),
         { inline_keyboard: [[{ text: '➕ Top Up Wallet', url: STORE_URL }]] }
       );
     }
@@ -3027,21 +3782,21 @@ function orderStatusMessageText(status, orderId, game, price, note, details) {
     d.packageName ? `Package: ${d.packageName}` : '',
     d.inGameId ? `Game ID: ${d.inGameId}${d.serverId ? ` (${d.serverId})` : ''}` : '',
   ].filter(Boolean);
-  const priceLine = (detailLines.length ? '\n' + detailLines.join('\n') : '') + (price > 0 ? `\nဈေးနှုန်း: ${price.toLocaleString()} MMK` : '');
-  const noteLine = note ? `\n\n${note}` : '';
+  const detailsText = (detailLines.length ? '\n' + detailLines.join('\n') : '') + (price > 0 ? `\nဈေးနှုန်း: ${price.toLocaleString()} MMK` : '');
   const timeline = orderTimelineLine(status);
-  const timelineLine = timeline ? `\n\n${timeline}` : '';
+  const vars = {
+    order: orderLine,
+    details: detailsText,
+    status,
+    timeline: timeline ? `\n\n${timeline}` : '',
+    note: note ? `\n\n${note}` : '',
+  };
   const norm = status.toLowerCase();
-  if (norm === 'success' || norm === 'completed' || norm === 'delivered') {
-    return `✅ Order ပြီးစီးပါပြီ!\n\n${orderLine}${priceLine}\n\nအော်ဒါ ပို့ဆောင်ပြီးပါပြီ။ ကျေးဇူးတင်ပါတယ်!${timelineLine}${noteLine}`;
-  }
-  if (norm === 'fail' || norm === 'failed' || norm === 'rejected') {
-    return `❌ Order မအောင်မြင်ပါ\n\n${orderLine}${priceLine}\n\nပြဿနာတစ်ခုခု ဖြစ်ပွားခဲ့ပါသည်။ အသေးစိတ် သိရှိလိုပါက Help Center သို့ ဆက်သွယ်ပါ။${timelineLine}${noteLine}`;
-  }
-  if (norm === 'processing') {
-    return `⏳ Order စီစဉ်နေပါသည်\n\n${orderLine}${priceLine}\n\nခဏစောင့်ပေးပါ၊ လုပ်ဆောင်နေပါသည်။${timelineLine}${noteLine}`;
-  }
-  return `🔔 Order Update\n\n${orderLine}${priceLine}\n\nအခြေအနေ: ${status}${timelineLine}${noteLine}`;
+  let key = 'orderUpdate';
+  if (norm === 'success' || norm === 'completed' || norm === 'delivered') key = 'orderSuccess';
+  else if (norm === 'fail' || norm === 'failed' || norm === 'rejected') key = 'orderFailed';
+  else if (norm === 'processing') key = 'orderProcessing';
+  return t('my', key, vars);
 }
 
 
