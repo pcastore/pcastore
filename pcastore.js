@@ -3829,6 +3829,9 @@ async function mintFirebaseToken(env, tgUser) {
     claims: {
       telegram_id: tgUser.id,
       telegram_username: tgUser.username || null,
+      // Read by telegram-worker.js /register-user so a new customer is created with a real name/photo.
+      name: [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ').slice(0, 60),
+      picture: tgUser.photo_url || '',
     },
   };
 
