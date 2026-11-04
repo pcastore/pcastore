@@ -2458,37 +2458,99 @@ async function handleGameListCallback(env, cq) {
   return answerCallbackQuery(env, cq.id);
 }
 
-// Reads all "games" docs, keeping only the fields this flow needs (mirrors
+// Reads the game list, keeping only the fields this flow needs (mirrors
 // store.html's GAMES/RAW_GAMES shape, minus images/packages/etc.).
+//
+// READ-COST FIX: this used to list the whole "games" collection on EVERY button tap and EVERY inline-search
+// keystroke (each one = one billed read per game doc). Now:
+//   1. cached 5 min per warm isolate (concurrent callers share one in-flight fetch),
+//   2. read from catalogPublic (the whole catalogue packed into 1-2 docs by the main Worker) = 1-2 reads,
+//      falling back to the old "games" listing only if catalogPublic hasn't been built yet.
+let gamesRawCache = null;
+let gamesRawCacheAt = 0;
+let gamesRawPromise = null;
+const GAMES_RAW_TTL_MS = 5 * 60 * 1000;
+
+function slimGame(id, f) {
+  return {
+    id,
+    name: f.name || '',
+    serverName: f.serverName || '',
+    order: f.order,
+    fulfillProvider: f.fulfillProvider || '',
+    category: f.category || '',
+  };
+}
+
 async function listGamesRaw(env) {
-  try {
-    const token = await getFirestoreAccessToken(env);
-    const projectId = firestoreProjectId(env);
-    const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
-    const res = await fetch(`${base}/games`, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const docs = data.documents || [];
-    return docs.map((d) => {
-      const f = d.fields;
-      return {
-        id: d.name.split('/').pop(),
-        name: fsField(f, 'name') || '',
-        serverName: fsField(f, 'serverName') || '',
-        order: fsField(f, 'order'),
-        fulfillProvider: fsField(f, 'fulfillProvider') || '',
-        category: fsField(f, 'category') || '',
-      };
-    });
-  } catch (e) {
-    console.error('listGamesRaw failed:', e);
-    return [];
-  }
+  const now = Date.now();
+  if (gamesRawCache && now - gamesRawCacheAt < GAMES_RAW_TTL_MS) return gamesRawCache;
+  if (gamesRawPromise) return gamesRawPromise;
+  gamesRawPromise = (async () => {
+    try {
+      const token = await getFirestoreAccessToken(env);
+      const projectId = firestoreProjectId(env);
+      const base = `https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents`;
+      let list = null;
+      // 1) packed catalogue
+      try {
+        const cres = await fetch(`${base}/catalogPublic?pageSize=20`, { headers: { Authorization: `Bearer ${token}` } });
+        if (cres.ok) {
+          const cdata = await cres.json();
+          const docs = cdata.documents || [];
+          if (docs.length) {
+            list = [];
+            for (const d of docs) {
+              const raw = d.fields ? fsField(d.fields, 'json') : '';
+              if (!raw) continue;
+              const o = JSON.parse(raw);
+              Object.keys(o).forEach((id) => list.push(slimGame(id, o[id] || {})));
+            }
+          }
+        }
+      } catch (e) { console.error('catalogPublic read failed, falling back to games:', e); list = null; }
+      // 2) fallback: the games collection itself (paged so nothing is silently cut off)
+      if (!list) {
+        list = [];
+        let pageToken = '';
+        for (let i = 0; i < 10; i++) {
+          const res = await fetch(`${base}/games?pageSize=300${pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : ''}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) break;
+          const data = await res.json();
+          (data.documents || []).forEach((d) => {
+            const f = d.fields || {};
+            list.push(slimGame(d.name.split('/').pop(), {
+              name: fsField(f, 'name'), serverName: fsField(f, 'serverName'), order: fsField(f, 'order'),
+              fulfillProvider: fsField(f, 'fulfillProvider'), category: fsField(f, 'category'),
+            }));
+          });
+          pageToken = data.nextPageToken || '';
+          if (!pageToken) break;
+        }
+      }
+      if (list.length) { gamesRawCache = list; gamesRawCacheAt = Date.now(); }
+      return list;
+    } catch (e) {
+      console.error('listGamesRaw failed:', e);
+      return gamesRawCache || [];
+    } finally {
+      gamesRawPromise = null;
+    }
+  })();
+  return gamesRawPromise;
 }
 
 // Mirrors store.html's settings/providerFlags read: missing doc or any
 // field other than an explicit `false` means that source is enabled.
+let providerFlagsCache = null;
+let providerFlagsCacheAt = 0;
 async function getProviderFlags(env) {
+  if (providerFlagsCache && Date.now() - providerFlagsCacheAt < 120000) return providerFlagsCache;
+  const flags = await getProviderFlagsUncached(env);
+  providerFlagsCache = flags; providerFlagsCacheAt = Date.now();
+  return flags;
+}
+async function getProviderFlagsUncached(env) {
   try {
     const token = await getFirestoreAccessToken(env);
     const projectId = firestoreProjectId(env);
