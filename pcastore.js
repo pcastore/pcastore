@@ -1047,8 +1047,36 @@ function kbNormalize(text) {
   return text;
 }
 
+// Button colours (Bot API 9.4 `style`: primary = blue, success = green, danger = red).
+// Shown by Telegram apps released after 9 Feb 2026; older apps just show a normal button.
+// Applied to every outgoing inline keyboard; a `style` already set on a button always wins.
+const BTN_STYLE_BY_CB = {
+  topup_confirm: 'success', 'wallet:topup': 'success', topup_retry_receipt: 'success',
+  topup_cancel: 'danger', topup_edit: 'primary', 'track:start': 'primary', 'faq:list': 'primary',
+  'adm:push': 'primary', 'adm:pushgo': 'success', 'adm:stop': 'danger', 'adm:resetgo': 'danger', 'adm:resetall': 'danger',
+};
+function buttonStyleFor(b) {
+  if (b.style) return b.style;
+  const byCb = b.callback_data && BTN_STYLE_BY_CB[b.callback_data];
+  if (byCb) return byCb;
+  if (b.web_app) return 'primary';                       // Login / Open Store / Shop
+  if (b.url && /^https:\/\/t\.me\//.test(b.url)) return 'success'; // Contact Support
+  const t = String(b.text || '');
+  if (t.startsWith('❌')) return 'danger';
+  if (t.startsWith('✅')) return 'success';
+  return undefined;
+}
+function styleInlineKeyboard(markup) {
+  const rows = markup.inline_keyboard.map((row) => row.map((b) => {
+    const s = buttonStyleFor(b);
+    return s && !b.style ? { ...b, style: s } : b;
+  }));
+  return { ...markup, inline_keyboard: rows };
+}
+
 function applyButtonOverrides(markup) {
   if (!markup || (!markup.inline_keyboard && !markup.keyboard)) return markup;
+  if (markup.inline_keyboard) markup = styleInlineKeyboard(markup);
   const ovs = CUSTOM.buttons || {};
   if (!Object.keys(ovs).length) return markup;
   const isKb = !!markup.keyboard;
@@ -1065,6 +1093,7 @@ function applyButtonOverrides(markup) {
       const nb = { ...b };
       if (ov.label) nb.text = ov.label;
       if (ov.icon) nb.icon_custom_emoji_id = ov.icon;
+      if (['primary', 'success', 'danger'].includes(ov.style)) nb.style = ov.style;
       if (ov.url && nb.url) nb.url = ov.url;
       out.push(nb);
     }
@@ -4061,7 +4090,7 @@ function orderTrackerKeyboard(orderId, status) {
   const key = normalizeOrderStatus(status);
   const cb = `ordst:${orderId}`;
   const rows = [
-    [{ text: STATUS_BADGE[key] || `🔔 ${status || '-'}`, callback_data: cb }],
+    [{ text: STATUS_BADGE[key] || `🔔 ${status || '-'}`, callback_data: cb, style: key === 'success' ? 'success' : key === 'fail' ? 'danger' : 'primary' }],
     [{ text: '🔄 Refresh', callback_data: cb }, { text: '🚀 Open Store', web_app: { url: STORE_URL } }],
   ];
   if (key === 'fail') rows.push([{ text: '💬 Contact Support', url: 'https://t.me/pca_gamestore' }]);
