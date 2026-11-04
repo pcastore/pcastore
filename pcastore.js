@@ -471,12 +471,13 @@ function paymentCopyRow(number, accountName) {
 // Even inline-button grid: `perRow` buttons per row. A label too long for half
 // a row gets its own full-width row (stacked above/below), and an odd leftover
 // stays on its own row, so the columns always line up.
-function gridRows(buttons, perRow = 2, maxLen = 18) {
+function gridRows(buttons, perRow = 2, maxLen = 22) {
   const rows = [];
   let cur = [];
   const flush = () => { if (cur.length) { rows.push(cur); cur = []; } };
-  for (const b of buttons) {
-    if (String(b.text || '').length > maxLen) { flush(); rows.push([b]); continue; }
+  for (let b of buttons) {
+    const t = String(b.text || '');
+    if (t.length > maxLen) b = { ...b, text: t.slice(0, maxLen - 1) + '…' };
     cur.push(b);
     if (cur.length === perRow) flush();
   }
@@ -826,6 +827,137 @@ function fillVars(tpl, vars, escape) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Default message styling: short Burmese/English copy with <b> bold and <blockquote> quotes.
+// A key listed here is sent as Telegram-HTML (placeholder values are escaped); the plain
+// MESSAGES entry stays as the base text. Keys that are drawn as rich tables (wallet, account,
+// ordersHeader, order status pushes) are intentionally NOT listed. An admin-customised text
+// from /manage still wins over these.
+// ---------------------------------------------------------------------------
+const MESSAGES_HTML = {
+  cancelled: { my: '✖️ <b>ပယ်ဖျက်လိုက်ပါပြီ</b>', en: '✖️ <b>Cancelled</b>' },
+  flooded: {
+    my: '🙏 <b>ခဏစောင့်ပါ</b>\nMessage များနေလို့ ခဏနားပြီး ပြန်ရိုက်ပါ။',
+    en: '🙏 <b>Slow down a bit</b>\nToo many messages — try again shortly.',
+  },
+  welcomeBack: {
+    my: '👋 မင်္ဂလာပါ <b>{name}</b>\n\n<blockquote>PCA Store မှာ ဂိမ်း <b>Top Up</b> နဲ့ <b>Voucher</b> ကို လွယ်ကူစွာ ဝယ်နိုင်ပါပြီ။</blockquote>\nအောက်က <b>Quick Menu</b> ကနေ ရွေးပါ 👇',
+    en: '👋 Welcome back, <b>{name}</b>\n\n<blockquote>Top up games and buy vouchers on <b>PCA Store</b>, right from this chat.</blockquote>\nPick from the <b>Quick Menu</b> below 👇',
+  },
+  welcomeNew: {
+    my: '👋 <b>မင်္ဂလာပါ</b>\nအောက်က <b>🔐 Login</b> ကိုနှိပ်ပြီး ဝင်ပါ။',
+    en: '👋 <b>Welcome</b>\nTap <b>🔐 Login</b> below to sign in.',
+  },
+  help: {
+    my: '📖 <b>PCA Store Help</b>\n\n<blockquote>🛍️ <b>Shop</b> — Store App ဖွင့်ရန်\n🎮 <b>Game List</b> — ဂိမ်းရွေးရန်\n💼 <b>My Wallet</b> — လက်ကျန်စစ်/ဖြည့်ရန်\n📦 <b>My Orders</b> — အော်ဒါအခြေအနေ</blockquote>\n🌐 ဘာသာပြောင်းရန် /language\n💬 မေးမြန်းလိုလျှင် <b>Help Center</b>',
+    en: '📖 <b>PCA Store Help</b>\n\n<blockquote>🛍️ <b>Shop</b> — open the Store app\n🎮 <b>Game List</b> — browse by game\n💼 <b>My Wallet</b> — balance &amp; top up\n📦 <b>My Orders</b> — order status</blockquote>\n🌐 Switch language: /language\n💬 Anything else: <b>Help Center</b>',
+  },
+  notConnected: {
+    my: '🔐 <b>Login မဝင်ရသေးပါ</b>\nအောက်က <b>🔐 Login</b> ကိုနှိပ်ပါ။',
+    en: '🔐 <b>Not logged in yet</b>\nTap <b>🔐 Login</b> below.',
+  },
+  shopPrompt: {
+    my: '🛍️ <b>PCA Store</b> ကိုဖွင့်ပြီး ဂိမ်း၊ Package (သို့) Voucher ရွေးပါ။',
+    en: '🛍️ Open <b>PCA Store</b> and pick a game, package, or voucher.',
+  },
+  buyAccountComingSoon: {
+    my: '🛒 <b>Buy Account</b>\n\n<blockquote>🚧 မကြာမီ လာမည် (Coming Soon)</blockquote>\nအသင့်ဖြစ်တာနဲ့ ဒီ Chat ထဲ အကြောင်းကြားပါမယ်။',
+    en: "🛒 <b>Buy Account</b>\n\n<blockquote>🚧 Coming soon</blockquote>\nWe'll message you here as soon as it's ready.",
+  },
+  ordersEmpty: { my: '📦 <b>Order မှတ်တမ်း မရှိသေးပါ</b>', en: "📦 <b>No orders yet</b>" },
+  topupPrompt: {
+    my: '➕ <b>Wallet ဖြည့်ရန်</b>\n\n<blockquote>ပမာဏကို ခလုတ်နှိပ်ရွေးပါ (သို့) ကိုယ်တိုင်ရိုက်ပါ\n<b>{min} – {max} MMK</b></blockquote>\nရပ်လိုလျှင် /cancel',
+    en: '➕ <b>Top Up Wallet</b>\n\n<blockquote>Pick an amount below, or type your own\n<b>{min} – {max} MMK</b></blockquote>\nSend /cancel to stop.',
+  },
+  helpCenter: {
+    my: '💬 <b>Help Center</b>\n\n<blockquote>အော်ဒါ၊ ငွေပေးချေမှု၊ account ပြဿနာများကို Support သို့ ဆက်သွယ်ပါ။</blockquote>',
+    en: '💬 <b>Help Center</b>\n\n<blockquote>Contact Support for anything about orders, payments, or your account.</blockquote>',
+  },
+  fallback: {
+    my: '🤔 <b>နားမလည်ပါ</b>\nအောက်က Menu ထဲက ရွေးပါ။',
+    en: "🤔 <b>Didn't get that</b>\nPlease pick an option from the menu below.",
+  },
+  languagePrompt: { my: '🌐 <b>ဘာသာစကား ရွေးပါ</b>', en: '🌐 <b>Choose your language</b>' },
+  languageSet: { my: '✅ <b>မြန်မာလို ပြောင်းပြီးပါပြီ</b>', en: '✅ <b>Language switched to English</b>' },
+  topupExpired: {
+    my: '⌛ <b>Top Up ကုန်သွားပါပြီ</b>\n💼 My Wallet → <b>Top Up Wallet</b> မှ ပြန်စပါ။',
+    en: '⌛ <b>Top-up expired</b>\nStart again from 💼 My Wallet → <b>Top Up Wallet</b>.',
+  },
+  topupRateLimited: {
+    my: '🚫 <b>Top Up တောင်းဆိုမှု များလွန်းနေပါသည်</b>\n<b>{mins} မိနစ်</b> အကြာမှ ပြန်ကြိုးစားပါ (သို့) Help Center ကို ဆက်သွယ်ပါ။',
+    en: '🚫 <b>Too many top-up requests</b>\nTry again in about <b>{mins} min</b>, or contact Help Center.',
+  },
+  receiptProcessing: { my: '⏳ Receipt လက်ခံရရှိပါပြီ — စစ်ဆေးနေပါတယ်...', en: '⏳ Receipt received — checking it now...' },
+  topupSuccess: {
+    my: '✅ <b>Top Up Request ပို့ပြီးပါပြီ</b>\n\n<blockquote>💵 ပမာဏ: <b>{amount} MMK</b></blockquote>\nAdmin စစ်ပြီးရင် Wallet ထဲ ထည့်ပေးပါမယ်။',
+    en: "✅ <b>Top-up request sent</b>\n\n<blockquote>💵 Amount: <b>{amount} MMK</b></blockquote>\nWe'll add it to your wallet once our admin verifies it.",
+  },
+  receiptFailed: {
+    my: '⚠️ <b>Receipt တင်မရပါ</b>\nထပ်ကြိုးစားပါ။',
+    en: '⚠️ <b>Receipt upload failed</b>\nPlease try again.',
+  },
+  menuUpdated: { my: '🔄 <b>Menu အသစ် ပြင်ပြီးပါပြီ</b> 👇', en: '🔄 <b>Menu updated</b> 👇' },
+  gameListMenu: { my: '🎮 <b>Game List</b>\nအမျိုးအစား ရွေးပါ:' },
+  genrePrompt: { my: '<b>{cat}</b>\n\nCategory ရွေးပါ:' },
+  noGames: { my: '<b>{header}</b>\n\nဂိမ်းစာရင်း မရှိသေးပါ။' },
+  pickGame: { my: '<b>{header}</b>\n\nဂိမ်းရွေးပါ <b>({count})</b>:' },
+  pickServer: { my: '<b>{name}</b>\n\nServer / Region ရွေးပါ:' },
+  openApp: { my: '🎮 <b>{label}</b>\n\nအောက်ခလုတ်နှိပ်ပြီး Store App ထဲ ဖွင့်ပါ 👇' },
+  availMenu: { my: '📋 <b>Available Games</b>\n\nCategory ရွေးပါ:' },
+  availHeader: {
+    my: '📋 <b>{cat}</b> — Available Games (<b>{count}</b>)\n\n<blockquote>ဂိမ်းအမည်ကို နှိပ်ပြီး Copy ယူပါ။ @pcagamestore_bot ရဲ့ search box ထဲ Paste လုပ်ပြီး ရှာပါ။</blockquote>',
+  },
+  topupAmountInvalid: { my: '⚠️ ပမာဏကို ဂဏန်းနဲ့ ရိုက်ပါ (ဥပမာ <b>10000</b>)။' },
+  topupAmountMin: { my: '⚠️ အနည်းဆုံး <b>{min} MMK</b> ဖြစ်ရပါမယ်။' },
+  topupAmountMax: { my: '⚠️ အများဆုံး <b>{max} MMK</b> ဖြစ်ရပါမယ်။' },
+  noPaymentMethods: { my: '⚠️ Payment method ခေတ္တမရပါ။ PCA Store app ထဲက Wallet မှ ဖြည့်ပါ။' },
+  pickMethod: { my: '💵 ပမာဏ: <b>{amount} MMK</b>\n\nငွေပေးချေမှု နည်းလမ်း ရွေးပါ:' },
+  topupConfirm: { my: '💵 ပမာဏ: <b>{amount} MMK</b>\n💳 <b>{method}</b> ဖြင့် လွှဲမှာ မှန်ပါသလား?' },
+  topupEditWhat: { my: '✏️ ဘာကို ပြင်မလဲ?' },
+  receiptPrompt: {
+    my: '💳 <b>{method}</b>\n\n<blockquote>အကောင့်: <b>{account}</b>\nနံပါတ်: <code>{number}</code></blockquote>\n<b>{amount} MMK</b> လွှဲပြီး Receipt screenshot ကို ဒီမှာ ပို့ပါ 📸',
+  },
+  sessionWarning: {
+    my: '⏰ <b>၂ မိနစ်အတွင်း Top Up ကုန်မယ်</b>\nအမြန်ဆက်လုပ်ပါ၊ မဟုတ်ရင် 💼 My Wallet → Top Up Wallet မှ ပြန်စရပါမယ်။',
+    en: '⏰ <b>Top-up expires in 2 minutes</b>\nKeep going now, or restart from 💼 My Wallet → Top Up Wallet.',
+  },
+  topupApproved: {
+    my: '✅ <b>Top Up အောင်မြင်ပါပြီ</b>\n\n<blockquote>💵 ပမာဏ: <b>{amount}</b>{balance}</blockquote>\nWallet ထဲ ထည့်ပြီးပါပြီ။ ကျေးဇူးတင်ပါတယ်!',
+  },
+  topupRejected: {
+    my: '❌ <b>Top Up မအောင်မြင်ပါ</b>\n\n<blockquote>💵 ပမာဏ: <b>{amount}</b></blockquote>\nReceipt (သို့) ငွေလွှဲမှု မှန်ကန်မှုမရှိ၍ ပယ်ချလိုက်ပါသည်။ Help Center သို့ ဆက်သွယ်ပါ။',
+  },
+  topupUpdate: { my: '🔔 <b>Top Up Update</b>\n\n<blockquote>💵 ပမာဏ: <b>{amount}</b>\n📌 အခြေအနေ: <b>{status}</b></blockquote>' },
+  lowBalance: {
+    my: '⚠️ <b>Wallet လက်ကျန် နည်းနေပါပြီ</b>\n\n<blockquote>💼 <b>{balance} MMK</b></blockquote>\nOrder မပျက်စေရန် အခုပဲ Top Up လုပ်ထားပါ။',
+  },
+  faqTitle: { my: '❓ <b>FAQ</b>\nမေးခွန်းတစ်ခု ရွေးပါ:' },
+  faq_topup_a: {
+    my: '<blockquote>1️⃣ 💼 <b>My Wallet</b> → ➕ <b>Top Up Wallet</b>\n2️⃣ ပမာဏ ရိုက်ထည့်ပါ\n3️⃣ ငွေပေးချေမှု နည်းလမ်း ရွေးပါ\n4️⃣ Receipt ဓာတ်ပုံ ပို့ပါ</blockquote>\nAdmin စစ်ပြီးတာနဲ့ Wallet ထဲ ချက်ချင်း ထည့်ပေးပါမယ်။',
+  },
+  faq_delivery_a: {
+    my: 'ပုံမှန် <b>မိနစ် 5–30</b> အတွင်း ပို့ပေးပါတယ်။\n\n<blockquote>📦 <b>My Orders</b> (သို့) 🔍 <b>Track my order</b> မှ အချိန်မရွေး စစ်နိုင်ပါတယ်။</blockquote>',
+  },
+  faq_refund_a: {
+    my: 'Order <b>Fail</b> ဖြစ်ရင် Wallet ထဲ <b>ငွေပြန်အမ်း</b>ပေးပါတယ်။\n\n<blockquote>ကြာနေရင် (သို့) ပြဿနာရှိရင် 💬 <b>Contact Support</b> ကို ဆက်သွယ်ပါ။</blockquote>',
+  },
+  faq_account_a: {
+    my: 'Telegram Account ကို <b>တစ်ကြိမ်တည်း</b> ချိတ်ပြီးရင် တခြားသူ ပြန်ချိတ်လို့ မရတော့ပါ။\n\n<blockquote>Wallet ငွေရှိပြီးသား Account ပြောင်းချိတ်ရင် Admin နဲ့ verify လုပ်ရပါမယ်။</blockquote>',
+  },
+  trackPrompt: { my: '🔍 <b>Order ID</b> ရိုက်ထည့်ပါ (ဥပမာ <code>12345</code> (သို့) <code>#12345</code>)\nရပ်လိုလျှင် /cancel' },
+  trackNotFound: { my: '❌ Order <b>#{id}</b> မတွေ့ပါ။ ID ပြန်စစ်ပြီး ထပ်ကြိုးစားပါ။' },
+  connected: {
+    my: '✅ <b>Login အောင်မြင်ပါပြီ</b>\n\n<blockquote>🆔 User ID: <code>{id}</code>\n👤 Name: <b>{name}</b>\n🔖 Username: {username}\n💬 Chat ID: <code>{chatId}</code>\n💰 Balance: <b>{balance} MMK</b>\n🕒 {time}</blockquote>',
+  },
+};
+// The styled default for (key, lang), or '' when this key/lang keeps its plain MESSAGES text.
+function htmlDefault(key, lang) {
+  const h = MESSAGES_HTML[key];
+  const e = MESSAGES[key];
+  if (!h || !e) return '';
+  return h[lang] || (!e[lang] && h.my) || '';
+}
+
 function t(lang, key, ...args) {
   const entry = MESSAGES[key];
   if (!entry) return '';
@@ -835,6 +967,8 @@ function t(lang, key, ...args) {
   const custom = CUSTOM.texts && CUSTOM.texts[key];
   const customHtml = custom && (custom[lang] || (!entry[lang] && custom.my));
   if (customHtml) return HTML_MARK + fillVars(customHtml, vars, true);
+  const styled = htmlDefault(key, lang);
+  if (styled) return HTML_MARK + fillVars(styled, vars, true);
   return fillVars(entry[lang] || entry.my, vars, false);
 }
 
@@ -1115,7 +1249,7 @@ async function sendAdminPanel(env, chatId) {
 
 function getTextDefault(key, lang) {
   const e = MESSAGES[key];
-  return e[lang] || e.my;
+  return htmlDefault(key, lang) || e[lang] || e.my;
 }
 
 function textListView(page) {
@@ -1546,14 +1680,27 @@ async function routeTelegramMessage(env, msg) {
   // with a "➕ Top Up Wallet" inline button underneath. The top-up flow only
   // starts when that button is tapped (callback 'wallet:topup' below).
   if (text === '💼 My Wallet' || text === '💼 Wallet') {
-    return sendTelegramMessage(
-      env, chatId,
-      t(lang, 'wallet', Number(acct.walletBalance || 0).toLocaleString()),
-      { inline_keyboard: [[{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }]] }
-    );
+    const balStr = Number(acct.walletBalance || 0).toLocaleString();
+    const walletTxt = t(lang, 'wallet', balStr);
+    const walletKb = { inline_keyboard: [[{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }]] };
+    if (isMarked(walletTxt)) return sendTelegramMessage(env, chatId, walletTxt, walletKb);
+    return sendRichChecked(env, chatId, [
+      { type: 'heading', size: 3, text: '💼 My Wallet' },
+      richKeyValueTable([[lang === 'en' ? '💰 Balance' : '💰 လက်ကျန်ငွေ', `${balStr} MMK`]]),
+    ], walletKb, walletTxt);
   }
   if (text === '👤 My Account') {
-    return sendTelegramMessage(env, chatId, t(lang, 'account', { id: acct.guestId, name: acct.name || '-', wallet: Number(acct.walletBalance || 0).toLocaleString() }), MAIN_KEYBOARD);
+    const acctWallet = Number(acct.walletBalance || 0).toLocaleString();
+    const acctTxt = t(lang, 'account', { id: acct.guestId, name: acct.name || '-', wallet: acctWallet });
+    if (isMarked(acctTxt)) return sendTelegramMessage(env, chatId, acctTxt, MAIN_KEYBOARD);
+    return sendRichChecked(env, chatId, [
+      { type: 'heading', size: 3, text: '👤 My Account' },
+      richKeyValueTable([
+        ['🆔 Account ID', String(acct.guestId)],
+        ['👤 Name', acct.name || '-'],
+        ['💼 Wallet', `${acctWallet} MMK`],
+      ]),
+    ], MAIN_KEYBOARD, acctTxt);
   }
   if (text === '📦 My Orders') {
     return sendMyOrdersList(env, chatId, acct, lang);
@@ -1565,11 +1712,7 @@ async function routeTelegramMessage(env, msg) {
   }
   if (text === '💬 Help Center') {
     return sendTelegramMessage(env, chatId, t(lang, 'helpCenter'), {
-      inline_keyboard: [
-        [{ text: '❓ FAQ', callback_data: 'faq:list' }],
-        [{ text: '🔍 Track my order', callback_data: 'track:start' }],
-        [{ text: '💬 Contact Support', url: 'https://t.me/pca_gamestore' }],
-      ],
+      inline_keyboard: helpCenterRows(),
     });
   }
 
@@ -1637,7 +1780,7 @@ async function sendPaymentMethodPicker(env, chatId, telegramId, amount) {
     { text: lastMethod && m.id === lastMethod.id ? `⭐ ${m.name}` : m.name, callback_data: `topup_pm:${m.id}` }
   ));
   return sendTelegramMessage(env, chatId, t('my', 'pickMethod', { amount: amount.toLocaleString() }), cancelInlineKeyboard(
-    gridRows(methodButtons, 2, 18)
+    gridRows(methodButtons, 2, 22)
   ));
 }
 
@@ -1655,10 +1798,18 @@ const FAQ_ITEMS = [
   { id: 'account', q: '🔒 Account လုံခြုံရေး' },
 ];
 
+// Help Center: [FAQ][Track] side by side, Contact Support full width underneath.
+function helpCenterRows() {
+  return [
+    [{ text: '❓ FAQ', callback_data: 'faq:list' }, { text: '🔍 Track my order', callback_data: 'track:start' }],
+    [{ text: '💬 Contact Support', url: 'https://t.me/pca_gamestore' }],
+  ];
+}
+
 function faqListMarkup() {
   return {
     inline_keyboard: [
-      ...FAQ_ITEMS.map((it) => [{ text: it.q, callback_data: `faq:${it.id}` }]),
+      ...gridRows(FAQ_ITEMS.map((it) => ({ text: it.q, callback_data: `faq:${it.id}` })), 2, 22),
       // Extra shortcut so a customer sitting at the bottom of the FAQ list
       // can jump straight back to Help Center instead of backing out via
       // an answer's "🔙 FAQ List" button first.
@@ -1679,11 +1830,7 @@ async function handleFaqCallback(env, cq) {
   if (id === 'help_center') {
     const lang = await getLanguage(env, telegramId);
     return editTelegramMessage(env, chatId, messageId, t(lang, 'helpCenter'), {
-      inline_keyboard: [
-        [{ text: '❓ FAQ', callback_data: 'faq:list' }],
-        [{ text: '🔍 Track my order', callback_data: 'track:start' }],
-        [{ text: '💬 Contact Support', url: 'https://t.me/pca_gamestore' }],
-      ],
+      inline_keyboard: helpCenterRows(),
     });
   }
 
@@ -1691,7 +1838,7 @@ async function handleFaqCallback(env, cq) {
   if (!item) {
     return editTelegramMessage(env, chatId, messageId, t('my', 'faqTitle'), faqListMarkup());
   }
-  return editTelegramMessage(env, chatId, messageId, concatMsg(btnLabel('in_faq_' + item.id, item.q), '\n\n', t('my', 'faq_' + item.id + '_a')), {
+  return editTelegramMessage(env, chatId, messageId, concatMsg(HTML_MARK + '<b>' + escapeHtml(btnLabel('in_faq_' + item.id, item.q)) + '</b>', '\n\n', t('my', 'faq_' + item.id + '_a')), {
     inline_keyboard: [[{ text: '🔙 FAQ List', callback_data: 'faq:list' }]],
   });
 }
@@ -1749,17 +1896,32 @@ function buildOrdersListMessage(orders, lang) {
       timeline || null,
     ].filter(Boolean).join('\n');
   });
-  const rows = orders.map((o) => [{ text: `🧾 #${o.id} အသေးစိတ်`, callback_data: `ord:${o.id}` }]);
+  const rows = gridRows(orders.map((o) => ({ text: `🧾 #${o.id}`, callback_data: `ord:${o.id}` })), 2, 22);
+  const header = t(lang, 'ordersHeader', orders.length);
+  const rich = isMarked(header) ? null : [
+    { type: 'heading', size: 3, text: header },
+    richTable(
+      orders.map((o) => [
+        `#${o.id}`,
+        o.game || '-',
+        `${Number(o.price || 0).toLocaleString()} MMK`,
+        STATUS_LABEL_MY[normalizeOrderStatus(o.status)] || o.status || '-',
+      ]),
+      { header: ['Order', 'Game', 'Price', 'Status'], note: '👇 အသေးစိတ်ကြည့်ရန် Order ကိုနှိပ်ပါ' }
+    ),
+  ];
   return {
-    text: concatMsg(t(lang, 'ordersHeader', orders.length), '\n\n', blocks.join('\n\n')),
+    text: concatMsg(header, '\n\n', blocks.join('\n\n')),
     replyMarkup: { inline_keyboard: rows },
+    rich,
   };
 }
 
 async function sendMyOrdersList(env, chatId, acct, lang) {
   const orders = await lookupRecentOrders(env, acct.guestId);
   if (!orders.length) return sendTelegramMessage(env, chatId, t(lang, 'ordersEmpty'), MAIN_KEYBOARD);
-  const { text, replyMarkup } = buildOrdersListMessage(orders, lang);
+  const { text, replyMarkup, rich } = buildOrdersListMessage(orders, lang);
+  if (rich) return sendRichChecked(env, chatId, rich, replyMarkup, text);
   return sendTelegramMessage(env, chatId, text, replyMarkup);
 }
 
@@ -1794,16 +1956,18 @@ async function editOrderDetail(env, chatId, messageId, order, replyMarkup) {
       : stages.map((s, i) => item(s, idx !== -1 && i <= idx));
     const blocks = [
       { type: 'heading', size: 3, text: `🧾 Order #${order.id}` },
-      { type: 'paragraph', text: `🎮 ${order.game || '-'}` },
-      { type: 'paragraph', text: `💰 ${Number(order.price || 0).toLocaleString()} MMK` },
-      ts ? { type: 'paragraph', text: ['🕐 ', { type: 'date_time', text: formatOrderDate(ts), unix_time: Math.floor(ts.getTime() / 1000), date_time_format: 'wDT' }] } : null,
+      richKeyValueTable([
+        ['🎮 Game', order.game || '-'],
+        ['💰 Price', `${Number(order.price || 0).toLocaleString()} MMK`],
+        ts ? ['🕐 Date', { type: 'date_time', text: formatOrderDate(ts), unix_time: Math.floor(ts.getTime() / 1000), date_time_format: 'wDT' }] : null,
+      ].filter(Boolean)),
       { type: 'list', items },
     ].filter(Boolean);
     const more = [];
-    if (order.paymentMethod) more.push({ type: 'paragraph', text: `💳 ငွေပေးချေမှု: ${order.paymentMethod}` });
-    if (order.note) more.push({ type: 'paragraph', text: `📝 ${order.note}` });
-    if (order.receiptUrl) more.push({ type: 'paragraph', text: ['🧾 ', { type: 'url', text: 'Receipt', url: order.receiptUrl }] });
-    if (more.length) blocks.push({ type: 'details', summary: '📋 အသေးစိတ်', is_open: true, blocks: more });
+    if (order.paymentMethod) more.push(['💳 ငွေပေးချေမှု', order.paymentMethod]);
+    if (order.note) more.push(['📝 Note', order.note]);
+    if (order.receiptUrl) more.push(['🧾 Receipt', { type: 'url', text: 'Open', url: order.receiptUrl }]);
+    if (more.length) blocks.push({ type: 'details', summary: '📋 အသေးစိတ်', is_open: true, blocks: [richKeyValueTable(more)] });
     const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
     const rmOv = applyButtonOverrides(replyMarkup);
     if (rmOv) payload.reply_markup = rmOv;
@@ -1838,7 +2002,8 @@ async function handleOrderDetailCallback(env, cq) {
     await answerCallbackQuery(env, cq.id);
     const orders = await lookupRecentOrders(env, acct.guestId);
     if (!orders.length) return editTelegramMessage(env, chatId, messageId, t(lang, 'ordersEmpty'), null);
-    const { text, replyMarkup } = buildOrdersListMessage(orders, lang);
+    const { text, replyMarkup, rich } = buildOrdersListMessage(orders, lang);
+    if (rich) return editRichChecked(env, chatId, messageId, rich, replyMarkup, text);
     return editTelegramMessage(env, chatId, messageId, text, replyMarkup);
   }
 
@@ -2163,8 +2328,7 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
     if (ctx) ctx.waitUntil(alertAdmin(env, `Wallet topup receipt failed for telegramId ${telegramId}`, e));
     return sendTelegramMessage(env, chatId, t(lang, 'receiptFailed'), {
       inline_keyboard: [
-        [{ text: '🔄 ထပ်ကြိုးစားမည်', callback_data: 'topup_retry_receipt' }],
-        [{ text: '❌ Cancel', callback_data: 'topup_cancel' }],
+        [{ text: '🔄 ထပ်ကြိုးစားမည်', callback_data: 'topup_retry_receipt' }, { text: '❌ Cancel', callback_data: 'topup_cancel' }],
       ],
     });
   }
@@ -2334,7 +2498,7 @@ function buildGroupListPage(cat, genre, groups, page) {
   const rows = gridRows(pageGroups.map((g, i) => ({
     text: g.ids.length > 1 ? `${g.name} (${g.ids.length})` : g.name,
     callback_data: `gl:g:${cat}:${genre}:${page}:${start + i}`,
-  })), 2, 18);
+  })), 2, 22);
   const navRow = [];
   if (page > 0) navRow.push({ text: '⬅️ Prev', callback_data: `gl:c:${cat}:${genre}:${page - 1}` });
   if (start + GAME_LIST_PAGE_SIZE < groups.length) navRow.push({ text: 'Next ➡️', callback_data: `gl:c:${cat}:${genre}:${page + 1}` });
@@ -3267,6 +3431,63 @@ async function editTelegramMessageChecked(env, chatId, messageId, text, replyMar
   }
 }
 
+// ---------------------------------------------------------------------------
+// Rich-message table helpers (Bot API 10.3). Every cell is centred and the table is
+// bordered, so orders / trackers read as one neat grid. `note` becomes a full-width
+// merged row (colspan = number of columns) under the table.
+// ---------------------------------------------------------------------------
+const rtHead = (text) => ({ text: String(text), is_header: true, align: 'center', valign: 'middle' });
+const rtCell = (text) => ({ text: typeof text === 'object' && text !== null ? text : String(text), align: 'center', valign: 'middle' });
+function richTable(rows, opts) {
+  const o = opts || {};
+  const cells = [];
+  if (o.header) cells.push(o.header.map(rtHead));
+  for (const r of rows) cells.push(r.map(rtCell));
+  const cols = Math.max(...cells.map((r) => r.length));
+  if (o.note) cells.push([{ text: String(o.note), align: 'center', valign: 'middle', colspan: cols }]);
+  return { type: 'table', is_bordered: true, ...(o.striped ? { is_striped: true } : {}), ...(o.caption ? { caption: o.caption } : {}), cells };
+}
+// Key | value card: first column = bold header cells.
+function richKeyValueTable(rows, note) {
+  const cells = rows.map(([k, v]) => [rtHead(k), rtCell(v)]);
+  if (note) cells.push([{ text: String(note), align: 'center', valign: 'middle', colspan: 2 }]);
+  return { type: 'table', is_bordered: true, cells };
+}
+async function sendRichChecked(env, chatId, blocks, replyMarkup, fallbackText) {
+  try {
+    const payload = { chat_id: chatId, rich_message: { blocks } };
+    const rm = applyButtonOverrides(replyMarkup);
+    if (rm) payload.reply_markup = rm;
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendRichMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) return { ok: true, messageId: data.result && data.result.message_id };
+    console.error('sendRichMessage failed, using plain text:', res.status, data && data.description);
+    if (data && data.error_code === 403) return { ok: false, blocked: true, status: 403 };
+  } catch (e) {
+    console.error('sendRichChecked threw:', e);
+  }
+  return sendTelegramMessageChecked(env, chatId, fallbackText, replyMarkup);
+}
+async function editRichChecked(env, chatId, messageId, blocks, replyMarkup, fallbackText) {
+  try {
+    const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
+    const rm = applyButtonOverrides(replyMarkup);
+    if (rm) payload.reply_markup = rm;
+    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) return { ok: true };
+    if (/not modified/i.test((data && data.description) || '')) return { ok: true, notModified: true };
+    console.error('editMessageText(rich) failed, using plain text:', res.status, data && data.description);
+  } catch (e) {
+    console.error('editRichChecked threw:', e);
+  }
+  return editTelegramMessageChecked(env, chatId, messageId, fallbackText, replyMarkup);
+}
+
 // Sends a DM to the admin's own Telegram chat when something that actually
 // matters breaks (an unhandled request error, or a wallet-topup receipt that
 // failed to save) — the previous behavior was console.error only, which
@@ -3740,15 +3961,16 @@ async function handleOrderStatusNotify(request, env, corsHeaders) {
     packageName: details.packageName || (orderRec && orderRec.itemAmount) || '',
   };
   const trackerText = orderTrackerText(liveStatus, orderId, trackerInfo);
+  const trackerRich = orderTrackerRich(liveStatus, orderId, trackerInfo);
   const trackerMarkup = orderTrackerKeyboard(orderId, liveStatus);
 
   let trackerUpdated = false;
   if (orderRec && orderRec.tgMsgId) {
-    const ed = await editTelegramMessageChecked(env, telegramId, Number(orderRec.tgMsgId), trackerText, trackerMarkup);
+    const ed = await editRichChecked(env, telegramId, Number(orderRec.tgMsgId), trackerRich, trackerMarkup, trackerText);
     trackerUpdated = ed.ok;
   }
   if (!trackerUpdated) {
-    const sent = await sendTelegramMessageChecked(env, telegramId, trackerText, trackerMarkup);
+    const sent = await sendRichChecked(env, telegramId, trackerRich, trackerMarkup, trackerText);
     // Tell the caller when Telegram refused the DM (user blocked the bot, bad
     // id, API down) — the order Worker only records "DM sent" on a 2xx.
     if (!sent.ok) {
@@ -3764,7 +3986,10 @@ async function handleOrderStatusNotify(request, env, corsHeaders) {
   // phone actually buzzes (an edit alone makes no notification sound).
   if (isFinal) {
     const text = orderStatusMessageText(status, orderId, game, price, note, details);
-    const sent = await sendTelegramMessageChecked(env, telegramId, text, openAppInlineKeyboard());
+    const finalRich = isMarked(text) ? null : orderFinalRich(status, orderId, game, price, note, details);
+    const sent = finalRich
+      ? await sendRichChecked(env, telegramId, finalRich, openAppInlineKeyboard(), text)
+      : await sendTelegramMessageChecked(env, telegramId, text, openAppInlineKeyboard());
     if (!sent.ok) {
       return json({ ok: false, delivered: false, blocked: !!sent.blocked }, sent.blocked ? 200 : 502, corsHeaders);
     }
@@ -3800,6 +4025,24 @@ function orderTrackerText(status, orderId, info) {
     `🕐 ${new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Yangon', hour12: false })} (Yangon) — 🔄 နှိပ်ပြီး နောက်ဆုံးအခြေအနေကြည့်ပါ`,
   ];
   return lines.filter((l, idx) => l !== '' || idx === 4).join('\n');
+}
+
+// Same card as a centred bordered table (rich message). Plain text above is the fallback.
+function orderTrackerRich(status, orderId, info) {
+  const i = info || {};
+  const key = normalizeOrderStatus(status);
+  const rows = [
+    ['🎮 Game', i.game || '-'],
+    i.packageName ? ['📦 Package', i.packageName] : null,
+    i.inGameId ? ['🆔 Game ID', `${i.inGameId}${i.serverId ? ` (${i.serverId})` : ''}`] : null,
+    Number(i.price) > 0 ? ['💰 ဈေးနှုန်း', `${Number(i.price).toLocaleString()} MMK`] : null,
+    ['📌 အခြေအနေ', STATUS_LABEL_MY[key] || status || '-'],
+  ].filter(Boolean);
+  const hhmm = new Date().toLocaleTimeString('en-GB', { timeZone: 'Asia/Yangon', hour12: false });
+  return [
+    { type: 'heading', size: 3, text: `📦 Order #${orderId || '-'}` },
+    richKeyValueTable(rows, `🕐 ${hhmm} (Yangon) — 🔄 နှိပ်ပြီး နောက်ဆုံးအခြေအနေကြည့်ပါ`),
+  ];
 }
 
 // Keyboard layout (all rows even):
@@ -3838,13 +4081,15 @@ async function handleOrderTrackerCallback(env, cq) {
   if (!acct || !order || order.userId !== acct.guestId) {
     return answerCallbackQuery(env, cq.id, 'ဤ Order ကို မတွေ့ရှိပါ။');
   }
-  await editTelegramMessageChecked(
+  const trInfo = {
+    game: order.game, price: order.price, inGameId: order.playerId,
+    serverId: order.serverId, packageName: order.itemAmount,
+  };
+  await editRichChecked(
     env, chatId, messageId,
-    orderTrackerText(order.status, order.id, {
-      game: order.game, price: order.price, inGameId: order.playerId,
-      serverId: order.serverId, packageName: order.itemAmount,
-    }),
-    orderTrackerKeyboard(order.id, order.status)
+    orderTrackerRich(order.status, order.id, trInfo),
+    orderTrackerKeyboard(order.id, order.status),
+    orderTrackerText(order.status, order.id, trInfo)
   );
 }
 
@@ -3938,6 +4183,33 @@ function formatOrderDate(ts) {
   // en-GB gives DD/MM/YYYY, HH:MM — reads unambiguously either way round for
   // a Myanmar audience, unlike MM/DD/YYYY.
   return ts.toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Success / Fail push as a centred table card (same wording as the plain orderSuccess /
+// orderFailed templates; an admin-customised template keeps using the plain/HTML path).
+function orderFinalRich(status, orderId, game, price, note, details) {
+  const d = details || {};
+  const norm = (status || '').toLowerCase();
+  const ok = ['success', 'completed', 'delivered'].includes(norm);
+  const bad = ['fail', 'failed', 'rejected'].includes(norm);
+  const rows = [
+    ['🔖 Order', `#${orderId || '-'}`],
+    game ? ['🎮 Game', game] : null,
+    d.packageName ? ['📦 Package', d.packageName] : null,
+    d.inGameId ? ['🆔 Game ID', `${d.inGameId}${d.serverId ? ` (${d.serverId})` : ''}`] : null,
+    price > 0 ? ['💰 ဈေးနှုန်း', `${price.toLocaleString()} MMK`] : null,
+    ['📌 အခြေအနေ', ok ? '✅ ပြီးစီးပါပြီ' : bad ? '❌ မအောင်မြင်ပါ' : (status || '-')],
+  ].filter(Boolean);
+  const closing = ok ? 'အော်ဒါ ပို့ဆောင်ပြီးပါပြီ။ ကျေးဇူးတင်ပါတယ်!'
+    : bad ? 'ပြဿနာတစ်ခုခု ဖြစ်ပွားခဲ့ပါသည်။ အသေးစိတ် သိရှိလိုပါက Help Center သို့ ဆက်သွယ်ပါ။' : '';
+  const blocks = [
+    { type: 'heading', size: 3, text: ok ? '✅ Order ပြီးစီးပါပြီ!' : bad ? '❌ Order မအောင်မြင်ပါ' : '🔔 Order Update' },
+    richKeyValueTable(rows, closing),
+  ];
+  const timeline = orderTimelineLine(status);
+  if (timeline) blocks.push({ type: 'paragraph', text: timeline });
+  if (note) blocks.push({ type: 'paragraph', text: `📝 ${note}` });
+  return blocks;
 }
 
 function orderStatusMessageText(status, orderId, game, price, note, details) {
