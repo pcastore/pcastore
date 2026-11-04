@@ -225,10 +225,10 @@ export default {
         await loadCustom(env);
       }
       if (request.method === 'POST' && url.pathname === '/auth/miniapp') {
-        return await handleMiniApp(request, env, corsHeaders);
+        return await handleMiniApp(request, env, corsHeaders, ctx);
       }
       if (request.method === 'POST' && url.pathname === '/auth/widget') {
-        return await handleWidget(request, env, corsHeaders);
+        return await handleWidget(request, env, corsHeaders, ctx);
       }
       if (request.method === 'POST' && url.pathname === '/notify-connected') {
         return await handleNotifyConnected(request, env, corsHeaders);
@@ -273,7 +273,7 @@ export default {
 // ---------------------------------------------------------------------------
 // Mini App login — verifies Telegram WebApp initData
 // ---------------------------------------------------------------------------
-async function handleMiniApp(request, env, corsHeaders) {
+async function handleMiniApp(request, env, corsHeaders, ctx) {
   const body = await safeJson(request);
   const initData = body && body.initData;
   if (!initData || typeof initData !== 'string') {
@@ -309,13 +309,45 @@ async function handleMiniApp(request, env, corsHeaders) {
   const tgUser = JSON.parse(userRaw);
 
   const token = await mintFirebaseToken(env, tgUser);
+  if (ctx) ctx.waitUntil(sendReturningLoginDm(env, tgUser));
   return json({ token, user: tgUser }, 200, corsHeaders);
 }
 
 // ---------------------------------------------------------------------------
+// Returning customers: DM their login details + menu on every login (10-min
+// cooldown so a reload doesn't spam). New customers get theirs from
+// /notify-connected once the store has created their ID.
+const LOGIN_DM_COOLDOWN_MS = 10 * 60 * 1000;
+async function sendReturningLoginDm(env, tgUser) {
+  try {
+    const telegramId = String(tgUser.id);
+    const acct = await lookupAccountByTelegramId(env, telegramId);
+    if (!acct) return;
+    const token = await getFirestoreAccessToken(env);
+    const base = `https://firestore.googleapis.com/v1/projects/${firestoreProjectId(env)}/databases/(default)/documents`;
+    const r = await fetch(`${base}/telegramBotPrefs/${telegramId}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (r.ok) {
+      const d = await r.json();
+      const last = d.fields && d.fields.lastLoginDm && d.fields.lastLoginDm.timestampValue;
+      if (last && Date.now() - Date.parse(last) < LOGIN_DM_COOLDOWN_MS) return;
+    }
+    await fetch(`${base}/telegramBotPrefs/${telegramId}?updateMask.fieldPaths=lastLoginDm`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: { lastLoginDm: { timestampValue: new Date().toISOString() } } }),
+    });
+    await loadCustom(env);
+    const time = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Yangon', hour12: false }) + ' (Yangon)';
+    await sendTelegramMessage(env, telegramId, t('my', 'connected', {
+      id: acct.guestId, name: acct.name || '-', username: tgUser.username ? '@' + tgUser.username : '-',
+      chatId: telegramId, balance: Number(acct.walletBalance || 0).toLocaleString(), time,
+    }), MAIN_KEYBOARD);
+  } catch (e) { console.error('returning login DM failed:', e); }
+}
+
 // Login Widget login — verifies the classic Telegram Login Widget payload
 // ---------------------------------------------------------------------------
-async function handleWidget(request, env, corsHeaders) {
+async function handleWidget(request, env, corsHeaders, ctx) {
   const body = await safeJson(request);
   if (!body || !body.id || !body.hash || !body.auth_date) {
     return json({ error: 'Missing widget fields' }, 400, corsHeaders);
@@ -351,6 +383,7 @@ async function handleWidget(request, env, corsHeaders) {
   };
 
   const token = await mintFirebaseToken(env, tgUser);
+  if (ctx) ctx.waitUntil(sendReturningLoginDm(env, tgUser));
   return json({ token, user: tgUser }, 200, corsHeaders);
 }
 
@@ -435,6 +468,22 @@ function paymentCopyRow(number, accountName) {
   return row;
 }
 
+// Even inline-button grid: `perRow` buttons per row. A label too long for half
+// a row gets its own full-width row (stacked above/below), and an odd leftover
+// stays on its own row, so the columns always line up.
+function gridRows(buttons, perRow = 2, maxLen = 18) {
+  const rows = [];
+  let cur = [];
+  const flush = () => { if (cur.length) { rows.push(cur); cur = []; } };
+  for (const b of buttons) {
+    if (String(b.text || '').length > maxLen) { flush(); rows.push([b]); continue; }
+    cur.push(b);
+    if (cur.length === perRow) flush();
+  }
+  flush();
+  return rows;
+}
+
 function cancelInlineKeyboard(extraRows) {
   return { inline_keyboard: [...(extraRows || []), [{ text: '❌ Cancel', callback_data: 'topup_cancel' }]] };
 }
@@ -461,7 +510,7 @@ function cancelInlineKeyboard(extraRows) {
 // reflects whatever the admin panel currently has live and nothing needs
 // to be cached in telegramBotSessions for this flow.
 // ---------------------------------------------------------------------------
-const GAME_LIST_CATEGORIES = { topup: '⚡ Top Up', voucher: '🎁 Voucher / Gift Card' };
+const GAME_LIST_CATEGORIES = { all: '🎮 Game List', topup: '⚡ Top Up', voucher: '🎁 Voucher / Gift Card' };
 const GAME_LIST_PAGE_SIZE = 8;
 
 // Game-genre filter chips, shown after Top Up/Voucher is picked — mirrors
@@ -476,6 +525,15 @@ const GAME_GENRES = [
   { id: 'creative', label: '🪶 Creative' },
 ];
 function findGenre(id) { return GAME_GENRES.find((g) => g.id === id); }
+
+// /start + any message from someone who has not logged in yet.
+function loginInlineKeyboard() {
+  return { inline_keyboard: [[{ text: '🔐 Login', web_app: { url: STORE_URL } }]] };
+}
+// /start for someone who is already logged in.
+function storeInlineKeyboard() {
+  return { inline_keyboard: [[{ text: '🚀 PCA Game Store', web_app: { url: STORE_URL } }]] };
+}
 
 function openAppInlineKeyboard() {
   return { inline_keyboard: [[{ text: '🚀 Open PCA Store', web_app: { url: STORE_URL } }]] };
@@ -605,16 +663,16 @@ const MESSAGES = {
     en: 'Welcome back, {name} 👋\n\nTop up games and buy vouchers on PCA Store, right from this chat.\n\nPick what you need from the Quick Menu below.',
   },
   welcomeNew: {
-    my: 'မင်္ဂလာပါ 👋\n\nPCA Store ကို အသုံးပြုရန် App ထဲက "Log in with Telegram" ကို အရင်နှိပ်ပြီး account ချိတ်ဆက်ပေးပါ။',
-    en: 'Welcome 👋\n\nTo use PCA Store, first tap "Log in with Telegram" inside the app to link your account.',
+    my: 'မင်္ဂလာပါ 👋\n\nအောက်က 🔐 Login ကိုနှိပ်ပြီး ဝင်ပါ။',
+    en: 'Welcome 👋\n\nTap 🔐 Login below to sign in.',
   },
   help: {
     my: 'PCA Store Help Center\n\n🛍️ Shop — Store App ကို တိုက်ရိုက်ဖွင့်ရန်\n🎮 Game List — Top Up / Voucher ခွဲပြီး ဂိမ်းရွေးရန်\n💼 My Wallet — လက်ကျန်ငွေစစ်ရန်နှင့် Wallet ဖြည့်ရန်\n📦 My Orders — အော်ဒါအခြေအနေကြည့်ရန်\n\nဘာသာစကားပြောင်းရန် /language ကို ရိုက်ပါ။\nမေးမြန်းလိုပါက Help Center ကို အသုံးပြုပါ။',
     en: 'PCA Store Help Center\n\n🛍️ Shop — open the Store app directly\n🎮 Game List — browse Top Up / Voucher by game\n💼 My Wallet — check your balance and add funds\n📦 My Orders — check order status\n\nSend /language to switch languages.\nUse Help Center for anything else.',
   },
   notConnected: {
-    my: 'Account မချိတ်ဆက်ရသေးပါ။ App ထဲက Telegram Login ကို အရင်သုံးပြီး /start ကို ပြန်နှိပ်ပါ။',
-    en: 'Account not linked yet. Use Telegram Login inside the app first, then send /start again.',
+    my: 'Login မဝင်ရသေးပါ။ အောက်က 🔐 Login ကိုနှိပ်ပါ။',
+    en: 'Not logged in yet. Tap 🔐 Login below.',
   },
   shopPrompt: {
     my: '🛍️ PCA Store ကို ဖွင့်ပြီး ဂိမ်း၊ Package သို့မဟုတ် Voucher ကို ရွေးချယ်ပါ။',
@@ -730,7 +788,7 @@ const MESSAGES = {
   },
   orderUpdate: { my: '🔔 Order Update\n\n{order}{details}\n\nအခြေအနေ: {status}{timeline}{note}' },
   connected: {
-    my: '✅ Telegram Connected\n\nUser ID: {id}\nName: {name}\nBalance: {balance} MMK\nConnected Time: {time}',
+    my: '✅ Login အောင်မြင်ပါပြီ\n\n🆔 User ID: {id}\n👤 Name: {name}\n🔖 Username: {username}\n💬 Chat ID: {chatId}\n💰 Balance: {balance} MMK\n🕒 Time: {time}',
   },
 };
 
@@ -741,7 +799,7 @@ const MSG_VARS = {
   genrePrompt: ['cat'], noGames: ['header'], pickGame: ['header', 'count'], pickServer: ['name'], openApp: ['label'],
   availHeader: ['cat', 'count'], topupAmountMin: ['min'], topupAmountMax: ['max'], pickMethod: ['amount'],
   topupConfirm: ['amount', 'method'], receiptPrompt: ['method', 'account', 'number', 'amount'],
-  trackNotFound: ['id'], connected: ['id', 'name', 'balance', 'time'], lowBalance: ['balance'],
+  trackNotFound: ['id'], connected: ['id', 'name', 'balance', 'time', 'username', 'chatId'], lowBalance: ['balance'],
   topupApproved: ['amount', 'balance'], topupRejected: ['amount'], topupUpdate: ['amount', 'status'],
   orderSuccess: ['order', 'details', 'timeline', 'note'], orderFailed: ['order', 'details', 'timeline', 'note'],
   orderProcessing: ['order', 'details', 'timeline', 'note'], orderUpdate: ['order', 'details', 'status', 'timeline', 'note'],
@@ -752,7 +810,7 @@ const SAMPLE_VARS = {
   amount: '10,000', cat: '⚡ Top Up', header: '⚡ Top Up · 🎯 MOBA', method: 'KBZPay', account: 'Mg Mg',
   number: '09123456789', label: 'Mobile Legends', order: 'Order #12345 — Mobile Legends',
   details: '\nGame ID: 123456 (2001)\nဈေးနှုန်း: 5,000 MMK', timeline: '\n\n🟢 Pending → 🟡 Processing → ⚪ Success',
-  note: '', status: 'Processing', time: '02/11/2026, 10:36:00 (Yangon)',
+  note: '', status: 'Processing', time: '02/11/2026, 10:36:00 (Yangon)', username: '@raycod', chatId: '123456789',
 };
 function sampleVarsFor(key) {
   const o = {};
@@ -801,6 +859,8 @@ const BUTTON_CATALOG = [
   { id: 'in_support', kind: 'in', def: '💬 Contact Support', name: 'Contact Support', hasUrl: true },
   { id: 'in_faqhelp', kind: 'in', def: '💬 Help Center', name: 'Help Center (FAQ အောက်)' },
   { id: 'in_openstore', kind: 'in', def: '🚀 Open PCA Store', name: 'Open PCA Store' },
+  { id: 'in_login', kind: 'in', def: '🔐 Login', name: 'Login (/start, not logged in)' },
+  { id: 'in_gamestore', kind: 'in', def: '🚀 PCA Game Store', name: 'PCA Game Store (/start, logged in)' },
   { id: 'in_openstore2', kind: 'in', def: '🚀 Open Store', name: 'Open Store (Order tracker)' },
   { id: 'in_cancel', kind: 'in', def: '❌ Cancel', name: 'Cancel (Top Up)', keep: true },
   { id: 'in_confirm', kind: 'in', def: '✅ Confirm', name: 'Confirm (Top Up)', keep: true },
@@ -1464,9 +1524,9 @@ async function routeTelegramMessage(env, msg) {
     const acct = await lookupAccountByTelegramId(env, telegramId);
     if (acct) {
       const name = acct.name || acct.telegramUsername || msg.from.first_name || 'Player';
-      return sendTelegramMessage(env, chatId, t(lang, 'welcomeBack', name), MAIN_KEYBOARD);
+      return sendTelegramMessage(env, chatId, t(lang, 'welcomeBack', name), storeInlineKeyboard());
     }
-    return sendTelegramMessage(env, chatId, t(lang, 'welcomeNew'), openAppInlineKeyboard());
+    return sendTelegramMessage(env, chatId, t(lang, 'welcomeNew'), loginInlineKeyboard());
   }
 
   if (text === '/help') {
@@ -1474,7 +1534,7 @@ async function routeTelegramMessage(env, msg) {
   }
 
   const acct = await lookupAccountByTelegramId(env, telegramId);
-  if (!acct) return sendTelegramMessage(env, chatId, t(lang, 'notConnected'));
+  if (!acct) return sendTelegramMessage(env, chatId, t(lang, 'notConnected'), loginInlineKeyboard());
 
   if (text === '📱 Official Mini App') {
     return sendTelegramMessage(env, chatId, t(lang, 'shopPrompt'), openAppInlineKeyboard());
@@ -1572,10 +1632,12 @@ async function sendPaymentMethodPicker(env, chatId, telegramId, amount) {
     ? [...methods].sort((a, b) => (a.id === lastMethod.id ? -1 : b.id === lastMethod.id ? 1 : 0))
     : methods;
 
+  // 2 columns; a name too long for half a row stacks on its own full-width row.
+  const methodButtons = sorted.map((m) => (
+    { text: lastMethod && m.id === lastMethod.id ? `⭐ ${m.name}` : m.name, callback_data: `topup_pm:${m.id}` }
+  ));
   return sendTelegramMessage(env, chatId, t('my', 'pickMethod', { amount: amount.toLocaleString() }), cancelInlineKeyboard(
-    sorted.map((m) => [
-      { text: lastMethod && m.id === lastMethod.id ? `⭐ ${m.name} (နောက်ဆုံးသုံး)` : m.name, callback_data: `topup_pm:${m.id}` },
-    ])
+    gridRows(methodButtons, 2, 18)
   ));
 }
 
@@ -2112,12 +2174,25 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 // Game List flow — category menu, paged group list, server picker, and the
 // final "Open in App" hand-off. See the comment above GAME_LIST_CATEGORIES.
 // ---------------------------------------------------------------------------
+// "🎮 Game List" goes straight to the game list (Top Up + Voucher together) -
+// no Top Up/Voucher or genre step in between.
+async function gameListAllContent(env, page) {
+  const [games, flags] = await Promise.all([listGamesRaw(env), getProviderFlags(env)]);
+  const groups = buildGameGroupsForCategory(games, flags, 'all', 'all');
+  const header = GAME_LIST_CATEGORIES.all;
+  if (!groups.length) return { text: t('my', 'noGames', { header }), markup: { inline_keyboard: [] } };
+  const maxPage = Math.max(0, Math.ceil(groups.length / GAME_LIST_PAGE_SIZE) - 1);
+  return {
+    text: t('my', 'pickGame', { header, count: groups.length }),
+    markup: buildGroupListPage('all', 'all', groups, Math.min(Math.max(page, 0), maxPage)),
+  };
+}
 async function sendGameListCategoryMenu(env, chatId) {
-  return sendTelegramMessage(
-    env, chatId,
-    t('my', 'gameListMenu'),
-    gameListCategoryMenuMarkup()
-  );
+  const { text, markup } = await gameListAllContent(env, 0);
+  return sendTelegramMessage(env, chatId, text, markup);
+}
+function genreBackRows(cat) {
+  return cat === 'all' ? [] : [[{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]];
 }
 
 // ---------------------------------------------------------------------------
@@ -2256,15 +2331,15 @@ function buildGenreMenuMarkup(cat) {
 function buildGroupListPage(cat, genre, groups, page) {
   const start = page * GAME_LIST_PAGE_SIZE;
   const pageGroups = groups.slice(start, start + GAME_LIST_PAGE_SIZE);
-  const rows = pageGroups.map((g, i) => [{
+  const rows = gridRows(pageGroups.map((g, i) => ({
     text: g.ids.length > 1 ? `${g.name} (${g.ids.length})` : g.name,
     callback_data: `gl:g:${cat}:${genre}:${page}:${start + i}`,
-  }]);
+  })), 2, 18);
   const navRow = [];
   if (page > 0) navRow.push({ text: '⬅️ Prev', callback_data: `gl:c:${cat}:${genre}:${page - 1}` });
   if (start + GAME_LIST_PAGE_SIZE < groups.length) navRow.push({ text: 'Next ➡️', callback_data: `gl:c:${cat}:${genre}:${page + 1}` });
   if (navRow.length) rows.push(navRow);
-  rows.push([{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]);
+  if (cat !== 'all') rows.push([{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]);
   return { inline_keyboard: rows };
 }
 
@@ -2288,22 +2363,25 @@ async function handleGameListCallback(env, cq) {
 
   if (kind === 'catmenu') {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, t('my', 'gameListMenu'), gameListCategoryMenuMarkup());
+    const c = await gameListAllContent(env, 0);
+    return editTelegramMessage(env, chatId, messageId, c.text, c.markup);
   }
 
   // 'genre' and 'c'/'g'/'s' all need the freshly-recomputed group list for
   // this category — nothing about this flow is cached in Firestore session
   // state, so every tap re-derives it from the live "games" collection.
   const cat = parts[2];
-  if (cat !== 'topup' && cat !== 'voucher') {
+  if (cat !== 'all' && cat !== 'topup' && cat !== 'voucher') {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, t('my', 'gameListMenu'), gameListCategoryMenuMarkup());
+    const c = await gameListAllContent(env, 0);
+    return editTelegramMessage(env, chatId, messageId, c.text, c.markup);
   }
   const catLabel = GAME_LIST_CATEGORIES[cat];
 
   if (kind === 'genre') {
     await answerCallbackQuery(env, cq.id);
-    return editTelegramMessage(env, chatId, messageId, t('my', 'genrePrompt', { cat: catLabel }), buildGenreMenuMarkup(cat));
+    const c = await gameListAllContent(env, 0);
+    return editTelegramMessage(env, chatId, messageId, c.text, c.markup);
   }
 
   // 'c', 'g' and 's' all carry the selected genre ('all' or a GAME_GENRES
@@ -2326,7 +2404,7 @@ async function handleGameListCallback(env, cq) {
     const groups = buildGameGroupsForCategory(games, flags, cat, genre);
     if (!groups.length) {
       return editTelegramMessage(env, chatId, messageId, t('my', 'noGames', { header: headerLabel }), {
-        inline_keyboard: [[{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]],
+        inline_keyboard: genreBackRows(cat),
       });
     }
     return editTelegramMessage(
@@ -2345,7 +2423,7 @@ async function handleGameListCallback(env, cq) {
     const group = groups[idx];
     if (!group) {
       return editTelegramMessage(env, chatId, messageId, 'ဤဂိမ်းကို မတွေ့ရှိပါ (list ပြောင်းသွားနိုင်ပါသည်)။ ပြန်ကြိုးစားပေးပါ။', {
-        inline_keyboard: [[{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]],
+        inline_keyboard: genreBackRows(cat),
       });
     }
     if (group.ids.length <= 1) {
@@ -2370,7 +2448,7 @@ async function handleGameListCallback(env, cq) {
     const gameId = group && group.ids[sIdx];
     if (!group || !gameId) {
       return editTelegramMessage(env, chatId, messageId, 'ဤ Server ကို မတွေ့ရှိပါ (list ပြောင်းသွားနိုင်ပါသည်)။ ပြန်ကြိုးစားပေးပါ။', {
-        inline_keyboard: [[{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]],
+        inline_keyboard: genreBackRows(cat),
       });
     }
     const label = group.servers[sIdx] || group.name;
@@ -2420,7 +2498,7 @@ async function getProviderFlags(env) {
     const doc = await res.json();
     if (!doc.fields) return {};
     const flags = {};
-    ['g2bulk', 'fazercard', 'aluu', 'jcplays'].forEach((p) => {
+    ['g2bulk', 'fazercard', 'jcplays'].forEach((p) => {
       flags[p] = fsField(doc.fields, p) !== false;
     });
     return flags;
@@ -2481,7 +2559,6 @@ async function getAdminBroadcastSecret(env) {
 function gameProviderFamily(fulfillProvider) {
   if (fulfillProvider === 'g2bulk' || fulfillProvider === 'g2bulk_voucher') return 'g2bulk';
   if (fulfillProvider === 'fazercard' || fulfillProvider === 'fazercard_giftcard') return 'fazercard';
-  if (fulfillProvider === 'aluu') return 'aluu';
   if (fulfillProvider === 'jcplays') return 'jcplays';
   return null;
 }
@@ -2499,7 +2576,7 @@ function buildGameGroupsForCategory(games, flags, cat, genre) {
     const family = gameProviderFamily(g.fulfillProvider);
     if (family && flags[family] === false) return false;
     const isVoucher = g.fulfillProvider === 'g2bulk_voucher' || g.fulfillProvider === 'fazercard_giftcard';
-    if (isVoucher !== wantVoucher) return false;
+    if (cat !== 'all' && isVoucher !== wantVoucher) return false; // 'all' = Top Up + Voucher together
     if (wantGenre && g.category !== wantGenre) return false;
     return true;
   });
@@ -3373,6 +3450,7 @@ async function handleNotifyConnected(request, env, corsHeaders) {
 
   const guestId = body.guestId ? String(body.guestId) : '-';
   const name = body.name ? String(body.name) : '-';
+  const username = body.username ? '@' + String(body.username).replace(/^@/, '') : '-';
   const balance = Number(body.balance || 0);
 
   const connectedTime = new Date().toLocaleString('en-GB', {
@@ -3380,10 +3458,21 @@ async function handleNotifyConnected(request, env, corsHeaders) {
     hour12: false,
   }) + ' (Yangon)';
 
-  const text = t('my', 'connected', { id: guestId, name, balance: balance.toLocaleString(), time: connectedTime });
+  // In a private chat the chat id IS the Telegram user id.
+  const text = t('my', 'connected', {
+    id: guestId, name, username, chatId: String(telegramId),
+    balance: balance.toLocaleString(), time: connectedTime,
+  });
 
   try {
-    await sendTelegramMessage(env, telegramId, text);
+    // MAIN_KEYBOARD is attached so the menu appears right after login -
+    // the customer never has to press /start again.
+    await sendTelegramMessage(env, telegramId, text, MAIN_KEYBOARD);
+    // Same audience list /start feeds, so a login alone is enough to be broadcastable.
+    await trackBotUser(env, String(telegramId), telegramId, {
+      first_name: name === '-' ? '' : name,
+      username: username === '-' ? '' : username.slice(1),
+    });
   } catch (e) {
     console.error('notify-connected send failed:', e);
   }
