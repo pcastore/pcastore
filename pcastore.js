@@ -309,7 +309,7 @@ async function handleMiniApp(request, env, corsHeaders, ctx) {
   const tgUser = JSON.parse(userRaw);
 
   const token = await mintFirebaseToken(env, tgUser);
-  if (ctx) ctx.waitUntil(sendReturningLoginDm(env, tgUser));
+  // (no login DM here any more: the "Login အောင်မြင်ပါပြီ" card is sent ONCE, when the account is first linked - /notify-connected)
   return json({ token, user: tgUser }, 200, corsHeaders);
 }
 
@@ -383,7 +383,7 @@ async function handleWidget(request, env, corsHeaders, ctx) {
   };
 
   const token = await mintFirebaseToken(env, tgUser);
-  if (ctx) ctx.waitUntil(sendReturningLoginDm(env, tgUser));
+  // (no login DM here any more: the "Login အောင်မြင်ပါပြီ" card is sent ONCE, when the account is first linked - /notify-connected)
   return json({ token, user: tgUser }, 200, corsHeaders);
 }
 
@@ -1125,7 +1125,9 @@ function styleInlineKeyboard(markup) {
 // matches on their exact text. Admin-customised icon_custom_emoji_id is left alone.
 const BTN_EMOJI_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u200d\ufe0e\ufe0f\u20e3]/gu;
 function stripBtnEmoji(text) {
-  const t = String(text || '').replace(BTN_EMOJI_RE, '').replace(/\s+/g, ' ').trim();
+  // Drop any filler added by an earlier pass first, so padding is always computed once from the clean label
+  // (otherwise a label padded twice, or one whose spaces get collapsed here, ends up a different width).
+  const t = String(text || '').replace(/\u2800/g, '').replace(BTN_EMOJI_RE, '').replace(/\s+/g, ' ').trim();
   return t || String(text || '');
 }
 function applyButtonOverrides(markup) {
@@ -2506,12 +2508,12 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 // Text width uses Liberation Sans advance widths (1/1000 em) for ASCII 32..126.
 // If buttons ever look a little uneven on your phone, tweak BTN_FILL_EM (width of one filler char).
 const BTN_FILL = '\u2800';
-const BTN_PX_PER_EM = 38.5;
-const BTN_PAD_PX = 110;
+const BTN_PX_PER_EM = 44.3; // re-calibrated from a measured 1080px screenshot (fit rms ~4px, was ~10px)
+const BTN_PAD_PX = 77.5;
 const BTN_GAP_PX = 20;
 const BTN_MAX_ROW_PX = 940;
 const BTN_ICON_PX = 33;
-const BTN_FILL_EM = 0.73;
+const BTN_FILL_EM = 0.673;
 const BTN_SPACE_EM = 0.278;
 const BTN_EM_ASCII = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
 function btnEm(s) {
@@ -2522,7 +2524,13 @@ function btnEm(s) {
     else if (c >= 32 && c <= 126) w += BTN_EM_ASCII[c - 32] / 1000;
     else if (ch === '\u00b7') w += 0.333;
     else if (ch === '\u2026' || ch === '\u2014') w += 1;
-    else if (/[\u102b-\u103e\u1056-\u1059\u105e-\u1060\u1062-\u1064\u1067-\u106d\u1071-\u1074\u1082-\u108d\u108f\u109a-\u109d]/.test(ch)) continue; // Burmese marks sit on the base letter
+    // Burmese: base letters ~0.9em. Marks are NOT all zero-width: the wide medials ြ (U+103C) / ျ (U+103B) and the
+    // spacing vowel signs ေ ာ ါ း take real room, the rest (ိ ီ ု ူ ့ ် ွ ှ ံ ...) sit on the base letter.
+    // 0.6 / 0.22 were fitted to measured button widths of သေချာပြီ / ပြန်ရွေးမည် / ဝယ်မည် (old model skipped every mark -> buttons came out too short).
+    else if (c === 0x103c) w += 0.6;
+    else if (c === 0x103b) w += 0.5;
+    else if (c === 0x1031 || c === 0x102c || c === 0x102b || c === 0x1038) w += 0.22;
+    else if (/[\u102d-\u1030\u1032-\u103a\u103d\u103e\u1056-\u1059\u105e-\u1060\u1062-\u1064\u1067-\u106d\u1071-\u1074\u1082-\u108d\u108f\u109a-\u109d]/.test(ch)) continue; // zero-width marks sit on the base letter
     else w += 0.9;
   }
   return w;
@@ -2548,11 +2556,24 @@ function padKeyboardEven(rows) {
   rows = rows.filter((r) => Array.isArray(r) && r.length);
   const rowMax = rows.map((r) => Math.max(...r.map(btnNaturalPx)));
   const rowTotal = rows.map((r, i) => r.length * rowMax[i] + (r.length - 1) * BTN_GAP_PX);
-  const R = Math.min(Math.max(...rowTotal), BTN_MAX_ROW_PX);
-  return rows.map((r, i) => {
+  const R0 = Math.min(Math.max(...rowTotal), BTN_MAX_ROW_PX);
+  const build = (R) => rows.map((r, i) => {
     const per = Math.max(rowMax[i], (R - (r.length - 1) * BTN_GAP_PX) / r.length);
     return r.map((b) => (b && typeof b.text === 'string' ? { ...b, text: padToEm(b.text, (per - BTN_PAD_PX - btnIconPx(b)) / BTN_PX_PER_EM) } : b));
   });
+  // The filler steps are coarse (one U+2800 is ~30px), so \"widest row\" is not always a width every row can hit.
+  // Try a few slightly wider targets and keep the one where the rows end up closest to each other.
+  const spread = (out) => {
+    const tot = out.map((r) => r.reduce((a, b) => a + btnNaturalPx(b), 0) + (r.length - 1) * BTN_GAP_PX);
+    const per = out.map((r) => Math.max(...r.map(btnNaturalPx)) - Math.min(...r.map(btnNaturalPx)));
+    return Math.max(...tot) - Math.min(...tot) + Math.max(...per);
+  };
+  let best = build(R0), bestScore = spread(best);
+  for (let R = R0 + 2; R <= Math.min(R0 + 70, BTN_MAX_ROW_PX); R += 2) {
+    const out = build(R), sc = spread(out);
+    if (sc < bestScore - 0.5) { best = out; bestScore = sc; }
+  }
+  return best;
 }
 // Grid of NAME buttons (no more picking by number): 3 / 2 / 1 per row depending on the longest name so a
 // row never gets wider than the screen, long names are cut with an ellipsis, the last row is padded with
@@ -2565,8 +2586,8 @@ function evenButtonGrid(btns, padCb, opts) {
     return out + '…';
   };
   const longest = btns.reduce((m, b) => Math.max(m, btnEm(b.text)), 0);
-  const cols = opts && opts.cols ? opts.cols : longest <= 4.8 ? 3 : longest <= 9 ? 2 : 1; // opts.cols = fixed layout (same on every page)
-  const cap = cols === 3 ? 4.8 : cols === 2 ? 9 : 20;
+  const cols = opts && opts.cols ? opts.cols : longest <= 4.8 ? 3 : longest <= 8.5 ? 2 : 1; // opts.cols = fixed layout (same on every page)
+  const cap = cols === 3 ? 4.8 : cols === 2 ? 8.5 : 19; // keeps a whole row <= BTN_MAX_ROW_PX with the calibrated px/em
   let cells = btns.map((b) => ({ ...b, text: cut(String(b.text || ''), cap) }));
   if (cols > 1) while (cells.length % cols) cells.push({ text: '·', callback_data: padCb || 'noop' });
   const target = cells.reduce((m, b) => Math.max(m, btnEm(b.text)), 0);
@@ -2970,6 +2991,11 @@ function buyNumbered(game) {
 }
 const mmk = (n) => `${Number(n || 0).toLocaleString()} MMK`;
 const BUY_CANCEL_ROW = [{ text: '❌ Cancel', callback_data: 'buy:x', style: 'danger' }];
+// Quantity 1..5. Only for packages the Worker can buy several of: G2Bulk game top-ups (the Worker places the units
+// one after another) and G2Bulk vouchers (one purchase call). Everything else stays at exactly 1.
+const BUY_MAX_QTY = 5;
+const buyQtyOk = (game, pkg) => !!(game && pkg && ((game.g2bulkCode && pkg.g2bulk) || pkg.voucherId));
+const buyQty = (game, pkg, buy) => (buyQtyOk(game, pkg) ? Math.min(BUY_MAX_QTY, Math.max(1, parseInt(buy && buy.qty, 10) || 1)) : 1);
 
 async function getBuy(env, telegramId, steps) {
   const s = await getBotSession(env, telegramId);
@@ -3064,16 +3090,13 @@ async function buyPickPackage(env, chatId, telegramId, n, messageId) {
   const game = await loadBuyGame(env, st.buy.gameId);
   const pkg = game && buyNumbered(game).find((p) => p.n === n);
   if (!pkg) return sendTelegramMessage(env, chatId, `⚠️ နံပါတ် ${n} မရှိပါ။ ပြန်ရွေးပါ။`);
-  await putBuy(env, telegramId, 'buy_sure', { ...st.buy, idx: n });
-  const blocks = [
-    { type: 'heading', size: 3, text: '🛒 ရွေးထားတာ သေချာပြီလား?' },
-    richKeyValueTable([['🎮 Game', game.serverName && game.serverName !== game.name ? `${game.name} (${game.serverName})` : game.name], ['📦 Package', pkg.amount], ['💰 Price', mmk(pkg.price)]]),
-  ];
-  const markup = { inline_keyboard: [
-    [{ text: '✅ သေချာပြီ', callback_data: 'buy:ok', style: 'success' }, { text: '🔄 ပြန်ရွေးမည်', callback_data: 'buy:chg', style: 'primary' }],
-    BUY_CANCEL_ROW,
-  ] };
-  return sendRichChecked(env, chatId, blocks, markup, `🛒 ရွေးထားတာ သေချာပြီလား?\n\n🎮 ${game.name}\n📦 ${pkg.amount}\n💰 ${mmk(pkg.price)}`);
+  const buy = { ...st.buy, idx: n, qty: 1 };
+  await putBuy(env, telegramId, 'buy_sure', buy);
+  // One confirmation only: the old "ရွေးထားတာ သေချာပြီလား?" card is gone.
+  // - game needs no ID  -> straight to the final card (price, quantity, wallet, [✅ ဝယ်မည်] = buys at once)
+  // - game needs an ID  -> ask for the ID, then the same final card
+  if (!buyNeeds(game).player) return buyShowFinal(env, chatId, telegramId, buy, game);
+  return buyAskId(env, chatId, telegramId, { ...st, buy });
 }
 
 function buyNeeds(game) {
@@ -3141,35 +3164,43 @@ async function handleBuyText(env, chatId, telegramId, text, session) {
   return sendTelegramMessage(env, chatId, '👆 အပေါ်က button ကို နှိပ်ပါ။');
 }
 
-async function buyShowFinal(env, chatId, telegramId, buy, game) {
+async function buyShowFinal(env, chatId, telegramId, buy, game, messageId) {
   game = await loadBuyGame(env, buy.gameId, true); // live price, same as the store
   const pkg = game && buyNumbered(game).find((p) => p.n === buy.idx);
   const acct = await lookupAccountByTelegramId(env, telegramId);
   if (!game || !pkg || !acct) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။ 🎮 Game List ကနေ ရွေးပါ။', MAIN_KEYBOARD);
-  buy = { ...buy, reqId: buy.reqId || ('b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)) };
+  const qty = buyQty(game, pkg, buy);
+  const total = pkg.price * qty;
+  buy = { ...buy, qty, reqId: buy.reqId || ('b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)) };
   await putBuy(env, telegramId, 'buy_final', buy);
   const bal = Number(acct.walletBalance || 0);
-  const enough = bal >= pkg.price;
+  const enough = bal >= total;
   const need = buyNeeds(game);
   const rows = [
     ['🎮 Game', game.serverName && game.serverName !== game.name ? `${game.name} (${game.serverName})` : game.name],
     ['📦 Package', pkg.amount],
     need.player ? ['🆔 ID', `${buy.playerId}${buy.serverId ? ` (${buy.serverId})` : ''}`] : null,
     buy.name ? ['👤 Name', buy.name] : null,
-    ['💰 Price', mmk(pkg.price)],
+    buyQtyOk(game, pkg) ? ['🔢 Quantity', `× ${qty}`] : null,
+    ['💰 Price', qty > 1 ? `${mmk(pkg.price)} × ${qty} = ${mmk(total)}` : mmk(total)],
     ['💼 Wallet', mmk(bal)],
-    enough ? ['➖ ကျန်ငွေ', mmk(bal - pkg.price)] : ['⚠️ လိုငွေ', mmk(pkg.price - bal)],
+    enough ? ['➖ ကျန်ငွေ', mmk(bal - total)] : ['⚠️ လိုငွေ', mmk(total - bal)],
   ].filter(Boolean);
-  const lowMsg = `⚠️ Wallet လက်ကျန်ငွေ မလောက်ပါ — ${mmk(pkg.price - bal)} ထပ်ဖြည့်ပြီးမှ ဝယ်လို့ရပါမယ်။ အောက်က ➕ Top Up Wallet ကို နှိပ်ပါ။`;
+  const lowMsg = `⚠️ Wallet လက်ကျန်ငွေ မလောက်ပါ — ${qty > 1 ? `${qty} ခုစာ အကုန်ဝယ်ဖို့ ` : ''}${mmk(total - bal)} ထပ်ဖြည့်ပြီးမှ ဝယ်လို့ရပါမယ်။ ${qty > 1 ? 'အရေအတွက် လျှော့ရွေးနိုင်သလို၊ ' : ''}အောက်က ➕ Top Up Wallet ကို နှိပ်ပါ။`;
   const blocks = [{ type: 'heading', size: 3, text: '💼 Wallet ဖြင့် ဝယ်ယူမည်' }, richKeyValueTable(rows), ...(enough ? [] : [{ type: 'paragraph', text: lowMsg }])];
   const kb = [];
+  // Quantity picker: the chosen number is green. Tapping a number re-draws this same card (buy:q:N).
+  if (buyQtyOk(game, pkg)) kb.push([1, 2, 3, 4, 5].map((n) => ({ text: n === qty ? `[ ${n} ]` : String(n), callback_data: `buy:q:${n}`, style: n === qty ? 'success' : 'primary' })));
   if (enough) kb.push([{ text: '✅ ဝယ်မည်', callback_data: 'buy:go', style: 'success' }]);
   else kb.push([{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }]);
   if (need.player) kb.push([{ text: '✏️ ID ပြင်မည်', callback_data: 'buy:id', style: 'primary' }, { text: '🔄 Package', callback_data: 'buy:chg', style: 'primary' }]);
   else kb.push([{ text: '🔄 Package', callback_data: 'buy:chg' }]);
   kb.push(BUY_CANCEL_ROW);
   const fb = rows.map((r) => `${r[0]}: ${r[1]}`).join('\n');
-  return sendRichChecked(env, chatId, blocks, { inline_keyboard: kb }, `💼 Wallet ဖြင့် ဝယ်ယူမည်\n\n${fb}${enough ? '' : `\n\n${lowMsg}`}`);
+  const plainFinal = `💼 Wallet ဖြင့် ဝယ်ယူမည်\n\n${fb}${enough ? '' : `\n\n${lowMsg}`}`;
+  return messageId
+    ? editRichChecked(env, chatId, messageId, blocks, { inline_keyboard: kb }, plainFinal)
+    : sendRichChecked(env, chatId, blocks, { inline_keyboard: kb }, plainFinal);
 }
 
 async function buyExecute(env, ctx, chatId, telegramId) {
@@ -3181,9 +3212,10 @@ async function buyExecute(env, ctx, chatId, telegramId) {
   if (!game || !pkg) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။ 🎮 Game List ကနေ ရွေးပါ။', MAIN_KEYBOARD);
   await putBuy(env, telegramId, 'buy_busy', buy);
   const need = buyNeeds(game);
+  const qty = buyQty(game, pkg, buy);
   const order = {
     playerId: need.player ? buy.playerId : '', serverId: need.server ? buy.serverId : '',
-    serverRegion: game.serverName || '', game: game.name, itemAmount: pkg.amount, price: pkg.price, quantity: 1,
+    serverRegion: game.serverName || '', game: game.name, itemAmount: pkg.amount, price: pkg.price * qty, quantity: qty, // price = unit price x quantity (the Worker re-checks it)
     packageTab: buyTabLabel(pkg.tab),
     ...(buy.name ? { inGameName: buy.name } : {}),
     ...(game.g2bulkCode && pkg.g2bulk ? { g2bulkGameCode: game.g2bulkCode, g2bulkCatalogueName: pkg.g2bulk } : {}),
@@ -3211,9 +3243,9 @@ async function buyExecute(env, ctx, chatId, telegramId) {
     const rows = [
       ['🔖 Order ID', `#${data.orderId}`],
       ['🎮 Game', game.serverName && game.serverName !== game.name ? `${game.name} (${game.serverName})` : game.name],
-      ['📦 Package', pkg.amount],
+      ['📦 Package', qty > 1 ? `${pkg.amount} × ${qty}` : pkg.amount],
       need.player ? ['🆔 Game ID', `${buy.playerId}${buy.serverId ? ` (${buy.serverId})` : ''}`] : null,
-      ['💰 ပေးချေငွေ', mmk(pkg.price)],
+      ['💰 ပေးချေငွေ', mmk(pkg.price * qty)],
       after ? ['💼 Wallet ကျန်ငွေ', mmk(after.walletBalance)] : null,
       ['📌 အခြေအနေ', '⏳ လုပ်ဆောင်နေပါပြီ'],
     ].filter(Boolean);
@@ -3284,6 +3316,14 @@ async function handleBuyCallback(env, cq, ctx) {
     return buyAskId(env, chatId, telegramId, st);
   }
   if (kind === 'id') return buyAskId(env, chatId, telegramId, st);
+  if (kind === 'q') {
+    if (st.step !== 'buy_final') return;
+    const n = Math.min(BUY_MAX_QTY, Math.max(1, parseInt(parts[2], 10) || 1));
+    if (n === (parseInt(st.buy.qty, 10) || 1)) return; // same number tapped again: nothing to change
+    const game = await loadBuyGame(env, st.buy.gameId, true);
+    // New request id: a different quantity is a different purchase, it must not be mistaken for a retry of the old one.
+    return buyShowFinal(env, chatId, telegramId, { ...st.buy, qty: n, reqId: undefined }, game, messageId);
+  }
   if (kind === 'go') return buyExecute(env, ctx, chatId, telegramId);
 }
 
@@ -4475,6 +4515,8 @@ async function lookupOrderById(env, orderId) {
       receiptUrl: fsField(f, 'receiptUrl'),
       // Live order tracker (see handleOrderStatusNotify) + card details.
       tgMsgId: fsField(f, 'tgMsgId'),
+      walletFlow: fsField(f, 'walletFlow'),
+      walletDebited: fsField(f, 'walletDebited'),
       playerId: fsField(f, 'playerId'),
       serverId: fsField(f, 'serverId'),
       itemAmount: fsField(f, 'itemAmount'),
@@ -4801,6 +4843,13 @@ async function handleOrderStatusNotify(request, env, corsHeaders) {
   // Success / Fail also get their own full-details message, so the customer's
   // phone actually buzzes (an edit alone makes no notification sound).
   if (isFinal) {
+    // Remaining wallet balance on a successful WALLET order. Only once the wallet debit is stamped on the
+    // order (walletFlow 2 + walletDebited), so the number shown is the balance AFTER paying - never the
+    // old one. Receipt/bank orders and failed orders don't touch the wallet, so they show nothing.
+    if (['success', 'completed', 'delivered'].includes(norm) && orderRec && Number(orderRec.walletFlow) === 2 && orderRec.walletDebited === true) {
+      const acct = await lookupAccountByTelegramId(env, telegramId);
+      if (acct && Number.isFinite(Number(acct.walletBalance))) details.balance = Number(acct.walletBalance);
+    }
     const text = orderStatusMessageText(status, orderId, game, price, note, details);
     const finalRich = isMarked(text) ? null : orderFinalRich(status, orderId, game, price, note, details);
     const sent = finalRich
@@ -4930,7 +4979,15 @@ async function handleTopupStatusNotify(request, env, corsHeaders) {
   let markup = openAppInlineKeyboard();
   if (norm === 'completed' || norm === 'success' || norm === 'approved') {
     const acct = await lookupAccountByTelegramId(env, telegramId);
-    const balLine = acct ? `\nလက်ကျန်ငွေ: ${Number(acct.walletBalance || 0).toLocaleString()} MMK` : '';
+    // The credit already happened (this runs after the admin's Confirm), so the balance read now is the
+    // NEW balance and the one before the top-up is simply new - amount.
+    let balLine = '';
+    if (acct) {
+      const nowBal = Number(acct.walletBalance || 0);
+      balLine = amount > 0
+        ? `\n⬅️ ယခင်လက်ကျန်: <b>${(nowBal - amount).toLocaleString()} MMK</b>\n➕ ဖြည့်ငွေ: <b>${amount.toLocaleString()} MMK</b>\n💰 လက်ကျန်အသစ်: <b>${nowBal.toLocaleString()} MMK</b>`
+        : `\n💰 လက်ကျန်ငွေ: <b>${nowBal.toLocaleString()} MMK</b>`;
+    }
     text = t('my', 'topupApproved', { amount: amountText, balance: balLine });
   } else if (norm === 'rejected' || norm === 'fail' || norm === 'failed') {
     text = t('my', 'topupRejected', { amount: amountText });
@@ -5014,6 +5071,7 @@ function orderFinalRich(status, orderId, game, price, note, details) {
     d.packageName ? ['📦 Package', d.packageName] : null,
     d.inGameId ? ['🆔 Game ID', `${d.inGameId}${d.serverId ? ` (${d.serverId})` : ''}`] : null,
     price > 0 ? ['💰 ဈေးနှုန်း', `${price.toLocaleString()} MMK`] : null,
+    ok && d.balance != null ? ['💼 လက်ကျန်ငွေ', `${d.balance.toLocaleString()} MMK`] : null,
     ['📌 အခြေအနေ', ok ? '✅ ပြီးစီးပါပြီ' : bad ? '❌ မအောင်မြင်ပါ' : (status || '-')],
   ].filter(Boolean);
   const closing = ok ? 'ဝယ်ယူအားပေးတဲ့အတွက် အထူးကျေးဇူးတင်ပါတယ် 🙏 မေးစရာ၊ ပြဿနာရှိရင် 💬 Help Center မှာ အချိန်မရွေး ဆက်သွယ်နိုင်ပါတယ်။'
@@ -5035,7 +5093,7 @@ function orderStatusMessageText(status, orderId, game, price, note, details) {
     d.packageName ? `Package: ${d.packageName}` : '',
     d.inGameId ? `Game ID: ${d.inGameId}${d.serverId ? ` (${d.serverId})` : ''}` : '',
   ].filter(Boolean);
-  const detailsText = (detailLines.length ? '\n' + detailLines.join('\n') : '') + (price > 0 ? `\nဈေးနှုန်း: ${price.toLocaleString()} MMK` : '');
+  const detailsText = (detailLines.length ? '\n' + detailLines.join('\n') : '') + (price > 0 ? `\nဈေးနှုန်း: ${price.toLocaleString()} MMK` : '') + (d.balance != null ? `\nလက်ကျန်ငွေ: ${d.balance.toLocaleString()} MMK` : '');
   const timeline = orderTimelineLine(status);
   const vars = {
     order: orderLine,
