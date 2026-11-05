@@ -16,3 +16,8 @@ mode = "smart"
 
 [observability]
 enabled = true
+
+# telegram-order worker ကို တိုက်ရိုက်ခေါ်ဖို့ (workers.dev error 1042 မဖြစ်အောင်)
+[[services]]
+binding = "COUPON_WORKER"
+service = "telegram-order"

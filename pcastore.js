@@ -398,7 +398,7 @@ async function handleWidget(request, env, corsHeaders, ctx) {
 // ---------------------------------------------------------------------------
 const STORE_URL = 'https://pcagamestoremm.vercel.app';
 const WALLET_TOPUP_MIN = 5000;
-const WALLET_TOPUP_MAX = 10000000;
+const WALLET_TOPUP_MAX = 1000000;
 // A Top Up flow (amount -> method -> receipt) left mid-way after this long
 // is treated as abandoned and auto-cleared, so a stray photo or number sent
 // hours/days later doesn't get mistaken for the old flow's next step.
@@ -442,7 +442,7 @@ const MAIN_MENU_TEXTS = new Set([
 const TOPUP_QUICK_AMOUNTS = [5000, 10000, 30000, 50000, 100000, 150000, 250000];
 function topupAmountRows(page) {
   const label = (n) => n.toLocaleString('en-US');
-  const btn = (n) => ({ text: label(n), callback_data: `topup_amt:${n}` });
+  const btn = (n) => ({ text: label(n), callback_data: `topup_amt:${n}`, style: 'primary' });
   if (page === 2) {
     const amounts = [];
     for (let n = 200000; n <= 1000000; n += 50000) amounts.push(n);
@@ -543,7 +543,7 @@ function storeInlineKeyboard() {
 }
 
 function openAppInlineKeyboard() {
-  return { inline_keyboard: [[{ text: '🚀 Open PCA Store', web_app: { url: STORE_URL } }]] };
+  return { inline_keyboard: [[{ text: '🚀 Open PCA Game Store', web_app: { url: STORE_URL } }]] };
 }
 
 async function handleTelegramWebhook(request, env, ctx) {
@@ -666,24 +666,24 @@ const MESSAGES = {
     en: "Please slow down a bit 🙏 That's a lot of messages — try again shortly.",
   },
   welcomeBack: {
-    my: 'မင်္ဂလာပါ {name} 👋\n\nPCA Store မှာ ဂိမ်း Top Up နဲ့ Voucher ဝန်ဆောင်မှုတွေကို လွယ်ကူစွာ အသုံးပြုနိုင်ပါပြီ။\n\nအောက်က Quick Menu ကနေ လိုအပ်တာကို ရွေးချယ်ပါ။',
-    en: 'Welcome back, {name} 👋\n\nTop up games and buy vouchers on PCA Store, right from this chat.\n\nPick what you need from the Quick Menu below.',
+    my: 'မင်္ဂလာပါ {name} 👋\n\nPCA Game Store မှာ ဂိမ်း Top Up နဲ့ Voucher ဝန်ဆောင်မှုတွေကို လွယ်ကူစွာ အသုံးပြုနိုင်ပါပြီ။\n\nအောက်က Quick Menu ကနေ လိုအပ်တာကို ရွေးချယ်ပါ။',
+    en: 'Welcome back, {name} 👋\n\nTop up games and buy vouchers on PCA Game Store, right from this chat.\n\nPick what you need from the Quick Menu below.',
   },
   welcomeNew: {
     my: 'မင်္ဂလာပါ 👋\n\nအောက်က 🔐 Login ကိုနှိပ်ပြီး ဝင်ပါ။',
     en: 'Welcome 👋\n\nTap 🔐 Login below to sign in.',
   },
   help: {
-    my: 'PCA Store Help Center\n\n🛍️ Shop — Store App ကို တိုက်ရိုက်ဖွင့်ရန်\n🎮 Game List — Top Up / Voucher ခွဲပြီး ဂိမ်းရွေးရန်\n💼 My Wallet — လက်ကျန်ငွေစစ်ရန်နှင့် Wallet ဖြည့်ရန်\n📦 My Orders — အော်ဒါအခြေအနေကြည့်ရန်\n\nဘာသာစကားပြောင်းရန် /language ကို ရိုက်ပါ။\nမေးမြန်းလိုပါက Help Center ကို အသုံးပြုပါ။',
-    en: 'PCA Store Help Center\n\n🛍️ Shop — open the Store app directly\n🎮 Game List — browse Top Up / Voucher by game\n💼 My Wallet — check your balance and add funds\n📦 My Orders — check order status\n\nSend /language to switch languages.\nUse Help Center for anything else.',
+    my: 'PCA Game Store Help Center\n\n🛍️ Shop — Store App ကို တိုက်ရိုက်ဖွင့်ရန်\n🎮 Game List — Top Up / Voucher ခွဲပြီး ဂိမ်းရွေးရန်\n💼 My Wallet — လက်ကျန်ငွေစစ်ရန်နှင့် Wallet ဖြည့်ရန်\n📦 My Orders — အော်ဒါအခြေအနေကြည့်ရန်\n\nဘာသာစကားပြောင်းရန် /language ကို ရိုက်ပါ။\nမေးမြန်းလိုပါက Help Center ကို အသုံးပြုပါ။',
+    en: 'PCA Game Store Help Center\n\n🛍️ Shop — open the Store app directly\n🎮 Game List — browse Top Up / Voucher by game\n💼 My Wallet — check your balance and add funds\n📦 My Orders — check order status\n\nSend /language to switch languages.\nUse Help Center for anything else.',
   },
   notConnected: {
     my: 'Login မဝင်ရသေးပါ။ အောက်က 🔐 Login ကိုနှိပ်ပါ။',
     en: 'Not logged in yet. Tap 🔐 Login below.',
   },
   shopPrompt: {
-    my: '🛍️ PCA Store ကို ဖွင့်ရန်',
-    en: '🛍️ Open PCA Store',
+    my: '🛍️ PCA Game Store ကို ဖွင့်ရန်',
+    en: '🛍️ Open PCA Game Store',
   },
   buyAccountComingSoon: {
     my: '🛒 Buy Account\n\n🚧 မကြာမီ လာမည် (Coming Soon)!\n\nဂိမ်း Account ဝယ်ယူခြင်း ဝန်ဆောင်မှုကို ပြင်ဆင်နေဆဲဖြစ်ပါသည်။ အသင့်ဖြစ်သည်နှင့် ဒီ Chat ထဲကို အကြောင်းကြားပေးပါမယ်။',
@@ -746,7 +746,7 @@ const MESSAGES = {
   topupAmountInvalid: { my: 'ပမာဏကို ဂဏန်းနဲ့ ရိုက်ထည့်ပါ (ဥပမာ - 10000)။' },
   topupAmountMin: { my: 'အနည်းဆုံး {min} MMK ဖြစ်ရပါမယ်။' },
   topupAmountMax: { my: 'အများဆုံး {max} MMK ဖြစ်ရပါမယ်။' },
-  noPaymentMethods: { my: 'Payment method များ ခေတ္တမရနိုင်ပါ။ PCA Store app ထဲက Wallet ကနေ ဖြည့်ကြည့်ပါ။' },
+  noPaymentMethods: { my: 'Payment method များ ခေတ္တမရနိုင်ပါ။ PCA Game Store app ထဲက Wallet ကနေ ဖြည့်ကြည့်ပါ။' },
   pickMethod: { my: 'ပမာဏ: {amount} MMK\n\nငွေပေးချေမှု နည်းလမ်း ရွေးချယ်ပါ:' },
   topupConfirm: { my: 'ပမာဏ: {amount} MMK\n{method} ဖြင့် လွှဲမှာ မှန်ပါသလား?' },
   topupEditWhat: { my: 'ဘာကို ပြင်ချင်ပါသလဲ?' },
@@ -785,7 +785,7 @@ const MESSAGES = {
   trackNotFound: { my: 'Order #{id} ကို မတွေ့ရှိပါ။ Order ID ကို ပြန်စစ်ပြီး ထပ်ကြိုးစားပေးပါ။' },
   // --- Order status pushes ---
   orderSuccess: {
-    my: '✅ Order ပြီးစီးပါပြီ\n\n{order}{details}\n\nဝယ်ယူအားပေးတဲ့အတွက် ကျေးဇူးတင်ပါတယ် 🙏{timeline}{note}',
+    my: '✅ Order ပြီးစီးပါပြီ\n\n{order}{details}\n\nဝယ်ယူအားပေးတဲ့အတွက် အထူးကျေးဇူးတင်ပါတယ် 🙏 မေးစရာ၊ ပြဿနာရှိရင် 💬 Help Center မှာ အချိန်မရွေး ဆက်သွယ်နိုင်ပါတယ်။ နောက်ထပ်လည်း ဆက်လက်အားပေးပါဦးနော်။{timeline}{note}',
   },
   orderFailed: {
     my: '❌ Order မအောင်မြင်ပါ\n\n{order}{details}\n\nစိတ်မကောင်းပါဘူး၊ ပြဿနာတက်သွားပါတယ်။ Support ကို ဆက်သွယ်ပေးပါ၊ အမြန်ကူညီပေးပါမယ်။{timeline}{note}',
@@ -813,7 +813,7 @@ const MSG_VARS = {
 };
 
 const SAMPLE_VARS = {
-  name: 'Raycod', balance: '25,000', id: '12345', wallet: '25,000', count: 3, min: '5,000', max: '10,000,000', mins: 10,
+  name: 'Raycod', balance: '25,000', id: '12345', wallet: '25,000', count: 3, min: '5,000', max: '1,000,000', mins: 10,
   amount: '10,000', cat: '⚡ Top Up', header: '⚡ Top Up · 🎯 MOBA', method: 'KBZPay', account: 'Mg Mg',
   number: '09123456789', label: 'Mobile Legends', order: 'Order #12345 — Mobile Legends',
   details: '\nGame ID: 123456 (2001)\nဈေးနှုန်း: 5,000 MMK', timeline: '\n\n🟢 Pending → 🟡 Processing → ⚪ Success',
@@ -847,24 +847,24 @@ const MESSAGES_HTML = {
     en: '🙏 <b>Slow down a bit</b>\nToo many messages — try again shortly.',
   },
   welcomeBack: {
-    my: '👋 မင်္ဂလာပါ <b>{name}</b>\n\n<blockquote>PCA Store မှာ ဂိမ်း <b>Top Up</b> နဲ့ <b>Voucher</b> ကို လွယ်ကူစွာ ဝယ်နိုင်ပါပြီ။</blockquote>\nအောက်က <b>Quick Menu</b> ကနေ ရွေးပါ 👇',
-    en: '👋 Welcome back, <b>{name}</b>\n\n<blockquote>Top up games and buy vouchers on <b>PCA Store</b>, right from this chat.</blockquote>\nPick from the <b>Quick Menu</b> below 👇',
+    my: '👋 မင်္ဂလာပါ <b>{name}</b>\n\n<blockquote>PCA Game Store မှာ ဂိမ်း <b>Top Up</b> နဲ့ <b>Voucher</b> ကို လွယ်ကူစွာ ဝယ်နိုင်ပါပြီ။</blockquote>\nအောက်က <b>Quick Menu</b> ကနေ ရွေးပါ 👇',
+    en: '👋 Welcome back, <b>{name}</b>\n\n<blockquote>Top up games and buy vouchers on <b>PCA Game Store</b>, right from this chat.</blockquote>\nPick from the <b>Quick Menu</b> below 👇',
   },
   welcomeNew: {
     my: '👋 <b>မင်္ဂလာပါ</b>\nအောက်က <b>🔐 Login</b> ကိုနှိပ်ပြီး ဝင်ပါ။',
     en: '👋 <b>Welcome</b>\nTap <b>🔐 Login</b> below to sign in.',
   },
   help: {
-    my: '📖 <b>PCA Store Help</b>\n\n<blockquote>🛍️ <b>Shop</b> — Store App ဖွင့်ရန်\n🎮 <b>Game List</b> — ဂိမ်းရွေးရန်\n💼 <b>My Wallet</b> — လက်ကျန်စစ်/ဖြည့်ရန်\n📦 <b>My Orders</b> — အော်ဒါအခြေအနေ</blockquote>\n🌐 ဘာသာပြောင်းရန် /language\n💬 မေးမြန်းလိုလျှင် <b>Help Center</b>',
-    en: '📖 <b>PCA Store Help</b>\n\n<blockquote>🛍️ <b>Shop</b> — open the Store app\n🎮 <b>Game List</b> — browse by game\n💼 <b>My Wallet</b> — balance &amp; top up\n📦 <b>My Orders</b> — order status</blockquote>\n🌐 Switch language: /language\n💬 Anything else: <b>Help Center</b>',
+    my: '📖 <b>PCA Game Store Help</b>\n\n<blockquote>🛍️ <b>Shop</b> — Store App ဖွင့်ရန်\n🎮 <b>Game List</b> — ဂိမ်းရွေးရန်\n💼 <b>My Wallet</b> — လက်ကျန်စစ်/ဖြည့်ရန်\n📦 <b>My Orders</b> — အော်ဒါအခြေအနေ</blockquote>\n🌐 ဘာသာပြောင်းရန် /language\n💬 မေးမြန်းလိုလျှင် <b>Help Center</b>',
+    en: '📖 <b>PCA Game Store Help</b>\n\n<blockquote>🛍️ <b>Shop</b> — open the Store app\n🎮 <b>Game List</b> — browse by game\n💼 <b>My Wallet</b> — balance &amp; top up\n📦 <b>My Orders</b> — order status</blockquote>\n🌐 Switch language: /language\n💬 Anything else: <b>Help Center</b>',
   },
   notConnected: {
     my: '🔐 <b>Login မဝင်ရသေးပါ</b>\nအောက်က <b>🔐 Login</b> ကိုနှိပ်ပါ။',
     en: '🔐 <b>Not logged in yet</b>\nTap <b>🔐 Login</b> below.',
   },
   shopPrompt: {
-    my: '🛍️ <b>PCA Store</b> ကို ဖွင့်ရန်',
-    en: '🛍️ Open <b>PCA Store</b>',
+    my: '🛍️ <b>PCA Game Store</b> ကို ဖွင့်ရန်',
+    en: '🛍️ Open <b>PCA Game Store</b>',
   },
   buyAccountComingSoon: {
     my: '🛒 <b>Buy Account</b>\n\n<blockquote>🚧 မကြာမီ လာမည် (Coming Soon)</blockquote>\nအသင့်ဖြစ်တာနဲ့ ဒီ Chat ထဲ အကြောင်းကြားပါမယ်။',
@@ -916,7 +916,7 @@ const MESSAGES_HTML = {
   topupAmountInvalid: { my: '⚠️ ပမာဏကို ဂဏန်းနဲ့ ရိုက်ပါ (ဥပမာ <b>10000</b>)။' },
   topupAmountMin: { my: '⚠️ အနည်းဆုံး <b>{min} MMK</b> ဖြစ်ရပါမယ်။' },
   topupAmountMax: { my: '⚠️ အများဆုံး <b>{max} MMK</b> ဖြစ်ရပါမယ်။' },
-  noPaymentMethods: { my: '⚠️ Payment method ခေတ္တမရပါ။ PCA Store app ထဲက Wallet မှ ဖြည့်ပါ။' },
+  noPaymentMethods: { my: '⚠️ Payment method ခေတ္တမရပါ။ PCA Game Store app ထဲက Wallet မှ ဖြည့်ပါ။' },
   pickMethod: { my: '💵 ပမာဏ: <b>{amount} MMK</b>\n\nငွေပေးချေမှု နည်းလမ်း ရွေးပါ:' },
   topupConfirm: { my: '💵 ပမာဏ: <b>{amount} MMK</b>\n💳 <b>{method}</b> ဖြင့် လွှဲမှာ မှန်ပါသလား?' },
   topupEditWhat: { my: '✏️ ဘာကို ပြင်မလဲ?' },
@@ -998,7 +998,7 @@ const BUTTON_CATALOG = [
   { id: 'in_track', kind: 'in', def: '🔍 Track my order', name: 'Track my order (Help Center)' },
   { id: 'in_support', kind: 'in', def: '💬 Contact Support', name: 'Contact Support', hasUrl: true },
   { id: 'in_faqhelp', kind: 'in', def: '💬 Help Center', name: 'Help Center (FAQ အောက်)' },
-  { id: 'in_openstore', kind: 'in', def: '🚀 Open PCA Store', name: 'Open PCA Store' },
+  { id: 'in_openstore', kind: 'in', def: '🚀 Open PCA Game Store', name: 'Open PCA Game Store' },
   { id: 'in_login', kind: 'in', def: '🔐 Login', name: 'Login (/start, not logged in)' },
   { id: 'in_gamestore', kind: 'in', def: '🚀 PCA Game Store', name: 'PCA Game Store (/start, logged in)' },
   { id: 'in_openstore2', kind: 'in', def: '🚀 Open Store', name: 'Open Store (Order tracker)' },
@@ -1099,7 +1099,7 @@ function kbNormalize(text) {
 // Applied to every outgoing inline keyboard; a `style` already set on a button always wins.
 const BTN_STYLE_BY_CB = {
   topup_confirm: 'success', 'wallet:topup': 'success', topup_retry_receipt: 'success',
-  topup_cancel: 'danger', topup_edit: 'primary', 'track:start': 'primary', 'faq:list': 'primary',
+  topup_cancel: 'danger', 'msg:close': 'danger', topup_edit: 'primary', 'track:start': 'primary', 'faq:list': 'primary',
   'adm:push': 'primary', 'adm:pushgo': 'success', 'adm:stop': 'danger', 'adm:resetgo': 'danger', 'adm:resetall': 'danger',
 };
 function buttonStyleFor(b) {
@@ -1320,7 +1320,7 @@ const ADMIN_GUIDE = [
 ];
 
 function adminHomeText() {
-  return '🛠 <b>PCA Store Bot Manager</b>\n\nCustomer တွေမြင်ရတဲ့ စာတွေ၊ ခလုတ်တွေကို ဒီကနေ ပြင်လို့ရပါတယ်။\nပြင်ချင်တာကို အောက်က ရွေးပါ 👇';
+  return '🛠 <b>PCA Game Store Bot Manager</b>\n\nCustomer တွေမြင်ရတဲ့ စာတွေ၊ ခလုတ်တွေကို ဒီကနေ ပြင်လို့ရပါတယ်။\nပြင်ချင်တာကို အောက်က ရွေးပါ 👇';
 }
 function adminHomeMarkup() {
   return {
@@ -1781,17 +1781,7 @@ async function routeTelegramMessage(env, msg) {
     return renderWalletCard(env, chatId, null, acct, lang, false);
   }
   if (text === '👤 My Account') {
-    const acctWallet = Number(acct.walletBalance || 0).toLocaleString();
-    const acctTxt = t(lang, 'account', { id: acct.guestId, name: acct.name || '-', wallet: acctWallet });
-    if (isMarked(acctTxt)) return sendTelegramMessage(env, chatId, acctTxt, MAIN_KEYBOARD);
-    return sendRichChecked(env, chatId, [
-      { type: 'heading', size: 3, text: '👤 My Account' },
-      richKeyValueTable([
-        ['🆔 Account ID', String(acct.guestId)],
-        ['👤 Name', acct.name || '-'],
-        ['💼 Wallet', `${acctWallet} MMK`],
-      ]),
-    ], MAIN_KEYBOARD, acctTxt);
+    return sendAccountCard(env, chatId, acct, lang, telegramId, msg.from);
   }
   if (text === '📦 My Orders') {
     return sendMyOrdersList(env, chatId, acct, lang);
@@ -2055,11 +2045,18 @@ async function editOrderDetail(env, chatId, messageId, order, replyMarkup) {
       ].filter(Boolean)),
       { type: 'list', items },
     ].filter(Boolean);
+    // Collapsible "Details" (closed by default - tap to expand). Same section name in the admin bot.
     const more = [];
+    const qty = Number(order.quantity) > 1 ? ` ×${Number(order.quantity)}` : '';
+    if (order.itemAmount) more.push(['📦 Package', `${order.itemAmount}${qty}${order.packageTab ? ` · ${order.packageTab}` : ''}`]);
+    if (order.playerId) more.push(['🆔 Player ID', String(order.playerId)]);
+    if (order.inGameName) more.push(['🏷️ In-Game Name', String(order.inGameName)]);
+    if (order.serverId) more.push(['🌐 Server ID', String(order.serverId)]);
+    if (order.serverRegion) more.push(['🌍 Server', String(order.serverRegion)]);
     if (order.paymentMethod) more.push(['💳 ငွေပေးချေမှု', order.paymentMethod]);
     if (order.note) more.push(['📝 Note', order.note]);
     if (order.receiptUrl) more.push(['🧾 Receipt', { type: 'url', text: 'Open', url: order.receiptUrl }]);
-    if (more.length) blocks.push({ type: 'details', summary: '📋 အသေးစိတ်', is_open: true, blocks: [richKeyValueTable(more)] });
+    if (more.length) blocks.push({ type: 'details', summary: '📋 Details', is_open: false, blocks: [richKeyValueTable(more)] });
     const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
     const rmOv = applyButtonOverrides(replyMarkup);
     if (rmOv) payload.reply_markup = rmOv;
@@ -2105,8 +2102,61 @@ async function handleOrderDetailCallback(env, cq) {
   }
   await answerCallbackQuery(env, cq.id);
   return editOrderDetail(env, chatId, messageId, order, {
-    inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ord:back' }]],
+    inline_keyboard: [[{ text: '🔙 Back', callback_data: 'ord:back' }, { text: '✖️ Close', callback_data: 'msg:close' }]],
   });
+}
+
+// 👤 My Account: every piece of profile info we hold, plus "Top Up Wallet" and "Close" buttons.
+function accountDate(v) {
+  const d = v instanceof Date ? v : v ? new Date(v) : null;
+  return d && !isNaN(d.getTime()) ? formatOrderDate(d) : '';
+}
+function buildAccountRows(acct, telegramId, from) {
+  const tgName = [from && from.first_name, from && from.last_name].filter(Boolean).join(' ');
+  const uname = (from && from.username) || acct.telegramUsername || '';
+  return [
+    ['🆔 Account ID', String(acct.guestId)],
+    ['👤 Name', acct.name || '-'],
+    ['📱 Phone', acct.phone || '-'],
+    ['📧 Email', acct.email || '-'],
+    acct.loginVia ? ['🔑 Login', acct.loginVia] : null,
+    ['✈️ Telegram', uname ? `@${String(uname).replace(/^@/, '')}` : (tgName || '-')],
+    ['🔢 Telegram ID', String(telegramId)],
+    ['💼 Wallet', `${Number(acct.walletBalance || 0).toLocaleString()} MMK`],
+    accountDate(acct.joinedAt) ? ['📅 Joined', accountDate(acct.joinedAt)] : null,
+    accountDate(acct.lastSeen) ? ['🕐 Last seen', accountDate(acct.lastSeen)] : null,
+  ].filter(Boolean);
+}
+function accountKeyboard() {
+  return { inline_keyboard: [[{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }, { text: '✖️ Close', callback_data: 'msg:close' }]] };
+}
+async function sendAccountCard(env, chatId, acct, lang, telegramId, from) {
+  const rows = buildAccountRows(acct, telegramId, from);
+  const acctWallet = Number(acct.walletBalance || 0).toLocaleString();
+  const baseTxt = t(lang, 'account', { id: acct.guestId, name: acct.name || '-', wallet: acctWallet });
+  const kb = accountKeyboard();
+  if (isMarked(baseTxt)) return sendTelegramMessage(env, chatId, baseTxt, kb); // admin-customised text wins
+  const plain = ['👤 My Account', '', ...rows.map(([k, v]) => `${k}: ${v}`)].join('\n');
+  return sendRichChecked(env, chatId, [
+    { type: 'heading', size: 3, text: '👤 My Account' },
+    richKeyValueTable(rows),
+  ], kb, plain);
+}
+
+// "✖️ Close": removes the message (falls back to a short note if Telegram won't delete it).
+async function handleCloseCallback(env, cq) {
+  const chatId = cq.message && cq.message.chat && cq.message.chat.id;
+  const messageId = cq.message && cq.message.message_id;
+  await answerCallbackQuery(env, cq.id);
+  if (!chatId || !messageId) return;
+  try {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (j && j.ok) return;
+  } catch (e) { console.error('deleteMessage failed', e); }
+  return editTelegramMessage(env, chatId, messageId, '✖️ ပိတ်လိုက်ပါပြီ', null);
 }
 
 async function startWalletTopup(env, chatId, telegramId, lang) {
@@ -2185,6 +2235,7 @@ async function routeTelegramCallback(env, cq, ctx) {
   if (data.startsWith('track:')) {
     return handleTrackOrderCallback(env, cq);
   }
+  if (data === 'msg:close') return handleCloseCallback(env, cq);
   if (data.startsWith('ord:')) {
     return handleOrderDetailCallback(env, cq);
   }
@@ -2414,7 +2465,7 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
       userPhone: '',
     });
     await clearBotSession(env, telegramId);
-    pingCouponWorker('topup', topupId).catch(() => {});
+    pingCouponWorker(env, 'topup', topupId).catch(() => {});
     return sendTelegramMessage(env, chatId, t(lang, 'topupSuccess', session.amount.toLocaleString()), MAIN_KEYBOARD);
   } catch (e) {
     console.error('submitTopupReceipt failed:', e);
@@ -2447,65 +2498,79 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 // ---------------------------------------------------------------------------
 // "🎮 Game List" goes straight to the game list (Top Up + Voucher together) -
 // no Top Up/Voucher or genre step in between.
-// Equal-width grid of NAME buttons (no more picking by number). Every button in the message uses the
-// same column count, chosen from the longest label: short labels -> 3 per row, medium -> 2, long -> 1.
-// Over-long labels are cut with an ellipsis and the last row is padded with inert "·" buttons so every
-// row has the same number of same-sized buttons.
-// Some Telegram clients draw inline buttons only as wide as their text, so "same count per row" is not
-// enough. Labels are therefore padded on both sides with an invisible filler (U+2800) until they have
-// the same estimated on-screen width. Tune BTN_FILL_W if pills still look uneven on your phone
-// (bigger number = fewer filler chars; smaller number = more filler chars).
+// Equal-width buttons. Some Telegram clients draw inline buttons only as wide as their text, so "same
+// count per row" is not enough. Every label is padded on both sides with an invisible filler (U+2800,
+// plus a few ordinary spaces for fine steps) until its on-screen width matches the others.
+// The numbers below were measured from real screenshots of the bot on a 1080px-wide phone:
+//   button width (px) = BTN_PX_PER_EM * text width (em) + BTN_PAD_PX   (+ BTN_ICON_PX for link / Mini App buttons)
+// Text width uses Liberation Sans advance widths (1/1000 em) for ASCII 32..126.
+// If buttons ever look a little uneven on your phone, tweak BTN_FILL_EM (width of one filler char).
 const BTN_FILL = '\u2800';
-const BTN_FILL_W = 1;
-// Rough width of a label in "average letter" units (narrow letters count less, wide ones more).
-function btnUnits(s) {
+const BTN_PX_PER_EM = 38.5;
+const BTN_PAD_PX = 110;
+const BTN_GAP_PX = 20;
+const BTN_MAX_ROW_PX = 940;
+const BTN_ICON_PX = 33;
+const BTN_FILL_EM = 0.73;
+const BTN_SPACE_EM = 0.278;
+const BTN_EM_ASCII = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+function btnEm(s) {
   let w = 0;
   for (const ch of Array.from(String(s || ''))) {
-    if (/[\u102b-\u103e\u1056-\u1059\u105e-\u1060\u1062-\u1064\u1067-\u106d\u1071-\u1074\u1082-\u108d\u108f\u109a-\u109d]/.test(ch)) continue; // Burmese marks sit on the base letter
-    if (ch === BTN_FILL) w += BTN_FILL_W;
-    else if (/[ilj.,:;'!|()\[\] \u00b7]/.test(ch)) w += 0.5;
-    else if (/[mwMW]/.test(ch)) w += 1.4;
-    else if (/[A-Z]/.test(ch)) w += 1.1;
-    else w += 1;
+    const c = ch.codePointAt(0);
+    if (ch === BTN_FILL) w += BTN_FILL_EM;
+    else if (c >= 32 && c <= 126) w += BTN_EM_ASCII[c - 32] / 1000;
+    else if (ch === '\u00b7') w += 0.333;
+    else if (ch === '\u2026' || ch === '\u2014') w += 1;
+    else if (/[\u102b-\u103e\u1056-\u1059\u105e-\u1060\u1062-\u1064\u1067-\u106d\u1071-\u1074\u1082-\u108d\u108f\u109a-\u109d]/.test(ch)) continue; // Burmese marks sit on the base letter
+    else w += 0.9;
   }
   return w;
 }
-function padBtnText(text, target) {
-  const n = Math.max(0, Math.round((target - btnUnits(text)) / BTN_FILL_W / 2));
-  return n ? BTN_FILL.repeat(n) + text + BTN_FILL.repeat(n) : text;
+const btnIconPx = (b) => (b && (b.url || b.web_app) ? BTN_ICON_PX : 0);
+const btnNaturalPx = (b) => BTN_PX_PER_EM * btnEm(b && b.text) + BTN_PAD_PX + btnIconPx(b);
+// Pads `text` with filler on both sides so its text width becomes about `targetEm`.
+function padToEm(text, targetEm) {
+  const gap = targetEm - btnEm(text);
+  if (gap < 0.25) return text;
+  let k = Math.floor(gap / BTN_FILL_EM);
+  const rem = gap - k * BTN_FILL_EM;
+  let m = Math.round(rem / BTN_SPACE_EM);
+  if (Math.abs(BTN_FILL_EM - rem) < Math.abs(rem - m * BTN_SPACE_EM)) { k += 1; m = 0; }
+  if (k === 0) { if (gap < BTN_FILL_EM / 2) return text; k = 1; m = 0; }
+  const a = Math.ceil(k / 2), b = k - a;
+  const sl = b ? Math.ceil(m / 2) : m, sr = m - sl; // spaces always sit between filler and text (edge spaces would be trimmed)
+  return BTN_FILL.repeat(a) + ' '.repeat(sl) + text + ' '.repeat(sr) + BTN_FILL.repeat(b);
 }
-// Link / Mini App buttons get a small arrow icon drawn by Telegram, which makes them look wider.
-const btnIconW = (b) => (b && (b.url || b.web_app) ? 1.5 : 0);
-const btnWidth = (b) => btnUnits(b && b.text) + btnIconW(b);
-// Make every button in one row the same width (a single-button row is left alone unless `forced`).
-function padRowEven(row, forced) {
-  if (!Array.isArray(row) || (row.length < 2 && !forced)) return row;
-  const target = forced || row.reduce((m, b) => Math.max(m, btnWidth(b)), 0);
-  return row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: padBtnText(b.text, target - btnIconW(b)) } : b));
-}
-// Whole keyboard: when it is small (Help Center, Back/Cancel, Prev/Next ...) every button in every row
-// gets the same width; a wide keyboard (long game names) is only equalised row by row.
+// Whole keyboard: every button in a row gets the same width, and every row is stretched to the same total
+// width as the widest row, so the left and right edges line up (short and long names look the same).
 function padKeyboardEven(rows) {
-  const maxCount = rows.reduce((m, r) => Math.max(m, r.length), 0);
-  const maxW = rows.reduce((m, r) => Math.max(m, ...r.map(btnWidth)), 0);
-  if (rows.length > 1 && maxW * maxCount <= 36) return rows.map((r) => padRowEven(r, maxW));
-  return rows.map((r) => padRowEven(r));
+  rows = rows.filter((r) => Array.isArray(r) && r.length);
+  const rowMax = rows.map((r) => Math.max(...r.map(btnNaturalPx)));
+  const rowTotal = rows.map((r, i) => r.length * rowMax[i] + (r.length - 1) * BTN_GAP_PX);
+  const R = Math.min(Math.max(...rowTotal), BTN_MAX_ROW_PX);
+  return rows.map((r, i) => {
+    const per = Math.max(rowMax[i], (R - (r.length - 1) * BTN_GAP_PX) / r.length);
+    return r.map((b) => (b && typeof b.text === 'string' ? { ...b, text: padToEm(b.text, (per - BTN_PAD_PX - btnIconPx(b)) / BTN_PX_PER_EM) } : b));
+  });
 }
-function evenButtonGrid(btns, padCb) {
+// Grid of NAME buttons (no more picking by number): 3 / 2 / 1 per row depending on the longest name so a
+// row never gets wider than the screen, long names are cut with an ellipsis, the last row is padded with
+// inert "·" buttons, and every button gets the same width.
+function evenButtonGrid(btns, padCb, opts) {
   const cut = (text, cap) => {
-    if (btnUnits(text) <= cap) return text;
+    if (btnEm(text) <= cap) return text;
     let out = '';
-    for (const ch of Array.from(text)) { if (btnUnits(out + ch) > cap - 0.5) break; out += ch; }
+    for (const ch of Array.from(text)) { if (btnEm(out + ch) > cap - 0.5) break; out += ch; }
     return out + '…';
   };
-  const longest = btns.reduce((m, b) => Math.max(m, btnUnits(b.text)), 0);
-  const cols = longest <= 10 ? 3 : longest <= 17 ? 2 : 1;
-  const cap = cols === 3 ? 10 : cols === 2 ? 17 : 34;
+  const longest = btns.reduce((m, b) => Math.max(m, btnEm(b.text)), 0);
+  const cols = opts && opts.cols ? opts.cols : longest <= 4.8 ? 3 : longest <= 9 ? 2 : 1; // opts.cols = fixed layout (same on every page)
+  const cap = cols === 3 ? 4.8 : cols === 2 ? 9 : 20;
   let cells = btns.map((b) => ({ ...b, text: cut(String(b.text || ''), cap) }));
   if (cols > 1) while (cells.length % cols) cells.push({ text: '·', callback_data: padCb || 'noop' });
-  // Same width for every button in the whole list, not just within a row.
-  const target = cells.reduce((m, b) => Math.max(m, btnUnits(b.text)), 0);
-  cells = cells.map((b) => ({ ...b, text: padBtnText(b.text, target) }));
+  const target = cells.reduce((m, b) => Math.max(m, btnEm(b.text)), 0);
+  cells = cells.map((b) => ({ ...b, text: padToEm(b.text, target) }));
   const rows = [];
   for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
   return rows;
@@ -2682,7 +2747,7 @@ function buildGroupListPage(cat, genre, groups, page) {
     text: g.ids.length > 1 ? `${g.name} (${g.ids.length})` : g.name,
     callback_data: `gl:g:${cat}:${genre}:${page}:${start + i}`,
     style: 'primary',
-  })));
+  })), 'noop', { cols: 2 }); // always 2 per row, every button the same width (long names cut with …, short ones padded)
   const navRow = [];
   const hasNext = start + GAME_LIST_PAGE_SIZE < groups.length;
   if (page > 0) navRow.push({ text: '⬅️ Prev', callback_data: `gl:c:${cat}:${genre}:${page - 1}` });
@@ -2821,7 +2886,7 @@ async function handleGameListCallback(env, cq) {
 const BUY_BTN_MAX = 60;
 let buyCatCache = null;
 let buyCatCacheAt = 0;
-const BUY_CAT_TTL_MS = 2 * 60 * 1000;
+const BUY_CAT_TTL_MS = 5 * 1000; // prices follow the store in (near) real time: the catalogue is re-read at most every 5s
 
 function fsDecodeValue(v) {
   if (!v || typeof v !== 'object') return undefined;
@@ -2858,9 +2923,9 @@ function slimBuyGame(id, g) {
   };
 }
 
-async function loadBuyGame(env, gameId) {
+async function loadBuyGame(env, gameId, fresh) {
   const now = Date.now();
-  if (!buyCatCache || now - buyCatCacheAt > BUY_CAT_TTL_MS) {
+  if (fresh || !buyCatCache || now - buyCatCacheAt > BUY_CAT_TTL_MS) { // fresh = always re-read (confirm screen + purchase)
     try {
       const token = await getFirestoreAccessToken(env);
       const base = `https://firestore.googleapis.com/v1/projects/${firestoreProjectId(env)}/databases/(default)/documents`;
@@ -2964,14 +3029,22 @@ async function renderBuyPriceList(env, chatId, messageId, game, backData, tabIdx
   const pkgBtns = items.slice(0, BUY_BTN_MAX).map((p) => ({ text: `${p.amount} — ${mmk(p.price)}`, callback_data: `buy:pick:${p.n}`, style: 'primary' }));
   const nums = evenButtonGrid(pkgBtns, 'buy:noop');
   const rows = [];
-  // Tab bar on top (like the store). Inline-button emoji get stripped, so the active tab is marked with ●.
+  // Tab bar on top (like the store). The active tab is shown by its green colour + the heading above
+  // (no "●" prefix any more: that glyph is not in the width model, so the active tab came out wider than
+  // the others). Tabs per row are chosen so the tab bar is never wider than the package grid below it -
+  // otherwise the keyboard gets stretched to the tab bar's width and the other rows come out uneven.
   if (tabs.length > 1) {
     const tabBtns = tabs.map((t, i) => ({
-      text: i === ti ? `● ${buyTabLabel(t, labels)}` : buyTabLabel(t, labels),
+      text: buyTabLabel(t, labels),
       callback_data: `buy:tab:${i}`,
       ...(i === ti ? { style: 'success' } : {}),
     }));
-    const per = tabBtns.length === 4 ? 2 : 3;
+    const clean = (b) => ({ ...b, text: stripBtnEmoji(b.text) });
+    const natW = (r) => r.length * Math.max(...r.map((b) => btnNaturalPx(clean(b)))) + (r.length - 1) * BTN_GAP_PX;
+    const pkgW = nums.length ? Math.max(...nums.map(natW)) : 0;
+    const tabNat = Math.max(...tabBtns.map((b) => btnNaturalPx(clean(b))));
+    let per = tabBtns.length === 4 ? 2 : Math.min(3, tabBtns.length);
+    while (per > 1 && pkgW && per * tabNat + (per - 1) * BTN_GAP_PX > pkgW + 80) per--;
     if (tabBtns.length > per) while (tabBtns.length % per) tabBtns.push({ text: '·', callback_data: 'buy:noop' });
     for (let i = 0; i < tabBtns.length; i += per) rows.push(tabBtns.slice(i, i + per));
   }
@@ -3069,7 +3142,7 @@ async function handleBuyText(env, chatId, telegramId, text, session) {
 }
 
 async function buyShowFinal(env, chatId, telegramId, buy, game) {
-  game = game || await loadBuyGame(env, buy.gameId);
+  game = await loadBuyGame(env, buy.gameId, true); // live price, same as the store
   const pkg = game && buyNumbered(game).find((p) => p.n === buy.idx);
   const acct = await lookupAccountByTelegramId(env, telegramId);
   if (!game || !pkg || !acct) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။ 🎮 Game List ကနေ ရွေးပါ။', MAIN_KEYBOARD);
@@ -3087,7 +3160,8 @@ async function buyShowFinal(env, chatId, telegramId, buy, game) {
     ['💼 Wallet', mmk(bal)],
     enough ? ['➖ ကျန်ငွေ', mmk(bal - pkg.price)] : ['⚠️ လိုငွေ', mmk(pkg.price - bal)],
   ].filter(Boolean);
-  const blocks = [{ type: 'heading', size: 3, text: '💼 Wallet ဖြင့် ဝယ်ယူမည်' }, richKeyValueTable(rows)];
+  const lowMsg = `⚠️ Wallet လက်ကျန်ငွေ မလောက်ပါ — ${mmk(pkg.price - bal)} ထပ်ဖြည့်ပြီးမှ ဝယ်လို့ရပါမယ်။ အောက်က ➕ Top Up Wallet ကို နှိပ်ပါ။`;
+  const blocks = [{ type: 'heading', size: 3, text: '💼 Wallet ဖြင့် ဝယ်ယူမည်' }, richKeyValueTable(rows), ...(enough ? [] : [{ type: 'paragraph', text: lowMsg }])];
   const kb = [];
   if (enough) kb.push([{ text: '✅ ဝယ်မည်', callback_data: 'buy:go', style: 'success' }]);
   else kb.push([{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }]);
@@ -3095,14 +3169,14 @@ async function buyShowFinal(env, chatId, telegramId, buy, game) {
   else kb.push([{ text: '🔄 Package', callback_data: 'buy:chg' }]);
   kb.push(BUY_CANCEL_ROW);
   const fb = rows.map((r) => `${r[0]}: ${r[1]}`).join('\n');
-  return sendRichChecked(env, chatId, blocks, { inline_keyboard: kb }, `💼 Wallet ဖြင့် ဝယ်ယူမည်\n\n${fb}`);
+  return sendRichChecked(env, chatId, blocks, { inline_keyboard: kb }, `💼 Wallet ဖြင့် ဝယ်ယူမည်\n\n${fb}${enough ? '' : `\n\n${lowMsg}`}`);
 }
 
 async function buyExecute(env, ctx, chatId, telegramId) {
   const st = await getBuy(env, telegramId, ['buy_final']);
   if (!st || st.stale) return sendTelegramMessage(env, chatId, '⌛ Session ကုန်သွားပါပြီ (သို့) ဝယ်ပြီးသားပါ။ 📦 My Orders ကြည့်ပါ။', MAIN_KEYBOARD);
   const buy = st.buy;
-  const game = await loadBuyGame(env, buy.gameId);
+  const game = await loadBuyGame(env, buy.gameId, true); // live price, same as the store
   const pkg = game && buyNumbered(game).find((p) => p.n === buy.idx);
   if (!game || !pkg) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။ 🎮 Game List ကနေ ရွေးပါ။', MAIN_KEYBOARD);
   await putBuy(env, telegramId, 'buy_busy', buy);
@@ -3120,7 +3194,7 @@ async function buyExecute(env, ctx, chatId, telegramId) {
   };
   let data = null;
   try {
-    const res = await fetch(`${COUPON_WORKER_URL}/bot-create-order`, {
+    const res = await callCouponWorker(env, '/bot-create-order', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ secret: await getAdminBroadcastSecret(env), telegramId, clientRequestId: buy.reqId, order }),
     });
@@ -3133,13 +3207,28 @@ async function buyExecute(env, ctx, chatId, telegramId) {
   }
   if (data.ok) {
     await clearBotSession(env, telegramId);
-    return sendTelegramMessage(env, chatId,
-      `✅ <b>Order တင်ပြီးပါပြီ</b>\n\n🔖 Order <code>${escapeHtml(data.orderId)}</code>\n📦 ${escapeHtml(pkg.amount)} — ${escapeHtml(mmk(pkg.price))}\n\n⏳ ဖြည့်ပြီးတာနဲ့ ဒီ Chat ထဲ အကြောင်းကြားပါမယ်။`, MAIN_KEYBOARD, 'HTML');
+    const after = await lookupAccountByTelegramId(env, telegramId); // real remaining balance
+    const rows = [
+      ['🔖 Order ID', `#${data.orderId}`],
+      ['🎮 Game', game.serverName && game.serverName !== game.name ? `${game.name} (${game.serverName})` : game.name],
+      ['📦 Package', pkg.amount],
+      need.player ? ['🆔 Game ID', `${buy.playerId}${buy.serverId ? ` (${buy.serverId})` : ''}`] : null,
+      ['💰 ပေးချေငွေ', mmk(pkg.price)],
+      after ? ['💼 Wallet ကျန်ငွေ', mmk(after.walletBalance)] : null,
+      ['📌 အခြေအနေ', '⏳ လုပ်ဆောင်နေပါပြီ'],
+    ].filter(Boolean);
+    const thanks = 'ဝယ်ယူအားပေးတဲ့အတွက် ကျေးဇူးတင်ပါတယ် 🙏 ဖြည့်ပြီးတာနဲ့ ဒီ Chat ထဲ ချက်ချင်း အကြောင်းကြားပေးပါမယ်။ မေးစရာရှိရင် 💬 Help Center မှာ ဆက်သွယ်နိုင်ပါတယ်။';
+    const plain = `✅ Order တင်ပြီးပါပြီ\n\n${rows.map((r) => `${r[0]}: ${r[1]}`).join('\n')}\n\n${thanks}`;
+    return sendRichChecked(env, chatId, [
+      { type: 'heading', size: 3, text: '✅ Order တင်ပြီးပါပြီ' },
+      richKeyValueTable(rows, thanks),
+    ], MAIN_KEYBOARD, plain);
   }
   const code = data.code || '';
   if (code === 'INSUFFICIENT_BALANCE') {
     await putBuy(env, telegramId, 'buy_final', buy);
-    return sendTelegramMessage(env, chatId, '💼 Wallet လက်ကျန်ငွေ မလောက်ပါ။', { inline_keyboard: [[{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }], BUY_CANCEL_ROW] });
+    // Balance changed since the confirm screen: re-show it with the shortfall message + Top Up button.
+    return buyShowFinal(env, chatId, telegramId, buy, game);
   }
   if (code === 'ID_CHECK_FAILED') {
     await putBuy(env, telegramId, 'buy_final', buy);
@@ -3150,7 +3239,11 @@ async function buyExecute(env, ctx, chatId, telegramId) {
     return sendTelegramMessage(env, chatId, '⏳ ခုနက Order ကို လုပ်ဆောင်နေဆဲပါ။ ခဏနေ 📦 My Orders မှာ စစ်ကြည့်ပါ။');
   }
   await clearBotSession(env, telegramId);
-  const why = code === 'PRICE_CHANGED' ? '💱 ဈေးနှုန်း ပြောင်းသွားပါပြီ။ 🎮 Game List ကနေ ပြန်ရွေးပါ။' : `❌ ${data.error || 'Order မတင်နိုင်ပါ'}`;
+  if (code === 'PRICE_CHANGED') {
+    await sendTelegramMessage(env, chatId, '💱 ဈေးနှုန်း အပြောင်းအလဲ ရှိသွားပါပြီ။ Store ကဈေးအသစ်အတိုင်း အောက်မှာ ပြန်ပြထားပါတယ်၊ စစ်ပြီး ပြန်အတည်ပြုပါ။');
+    return buyShowFinal(env, chatId, telegramId, { ...buy, reqId: undefined }, null);
+  }
+  const why = `❌ ${data.error || 'Order မတင်နိုင်ပါ'}`;
   return sendTelegramMessage(env, chatId, why, MAIN_KEYBOARD);
 }
 
@@ -3450,7 +3543,7 @@ async function handleInlineQuery(env, inlineQuery) {
       title: g.name,
       description: `${GAME_LIST_CATEGORIES[g.cat]}${serverNote}`,
       input_message_content: { message_text: `🎮 ${g.name}\n\nဖွင့်ကြည့်ရန်: ${url}` },
-      reply_markup: { inline_keyboard: [[{ text: '🚀 Open PCA Store', url }]] },
+      reply_markup: { inline_keyboard: [[{ text: '🚀 Open PCA Game Store', url }]] },
     };
   });
 
@@ -3577,8 +3670,17 @@ async function uploadTelegramPhotoToD1(env, fileId) {
 // saving a walletTopups doc — lets the admin bot notify + Confirm/Reject
 // this bot-submitted top-up instantly instead of waiting for its next cron.
 const COUPON_WORKER_URL = 'https://telegram-order.pca-game-store.workers.dev';
-function pingCouponWorker(type, id) {
-  return fetch(`${COUPON_WORKER_URL}/ping`, {
+// Service Binding COUPON_WORKER (-> telegram-order) avoids Cloudflare error 1042
+// (a Worker can't fetch another Worker's public workers.dev URL). Falls back to
+// plain fetch() when the binding isn't configured.
+function callCouponWorker(env, path, init) {
+  const url = `${COUPON_WORKER_URL}${path}`;
+  return env.COUPON_WORKER && typeof env.COUPON_WORKER.fetch === 'function'
+    ? env.COUPON_WORKER.fetch(url, init)
+    : fetch(url, init);
+}
+function pingCouponWorker(env, type, id) {
+  return callCouponWorker(env, '/ping', {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify({ type, id }),
@@ -4328,6 +4430,11 @@ async function lookupAccountByTelegramId(env, telegramId) {
       name: fsField(f, 'name'),
       telegramUsername: fsField(f, 'telegramUsername'),
       walletBalance: fsField(f, 'walletBalance') || 0,
+      phone: fsField(f, 'phone'),
+      email: fsField(f, 'googleEmail') || fsField(f, 'facebookEmail') || fsField(f, 'email'),
+      loginVia: [fsField(f, 'googleEmail') ? 'Google' : '', fsField(f, 'facebookEmail') ? 'Facebook' : ''].filter(Boolean).join(' + '),
+      joinedAt: fsField(f, 'createdAt') || fsField(f, 'joinedAt'),
+      lastSeen: fsField(f, 'lastSeen'),
     };
   } catch (e) {
     console.error('lookupAccountByTelegramId failed:', e);
@@ -4371,6 +4478,10 @@ async function lookupOrderById(env, orderId) {
       playerId: fsField(f, 'playerId'),
       serverId: fsField(f, 'serverId'),
       itemAmount: fsField(f, 'itemAmount'),
+      inGameName: fsField(f, 'inGameName'),
+      serverRegion: fsField(f, 'serverRegion'),
+      packageTab: fsField(f, 'packageTab'),
+      quantity: fsField(f, 'quantity'),
     };
   } catch (e) {
     console.error('lookupOrderById failed:', e);
@@ -4905,7 +5016,7 @@ function orderFinalRich(status, orderId, game, price, note, details) {
     price > 0 ? ['💰 ဈေးနှုန်း', `${price.toLocaleString()} MMK`] : null,
     ['📌 အခြေအနေ', ok ? '✅ ပြီးစီးပါပြီ' : bad ? '❌ မအောင်မြင်ပါ' : (status || '-')],
   ].filter(Boolean);
-  const closing = ok ? 'ဝယ်ယူအားပေးတဲ့အတွက် ကျေးဇူးတင်ပါတယ် 🙏'
+  const closing = ok ? 'ဝယ်ယူအားပေးတဲ့အတွက် အထူးကျေးဇူးတင်ပါတယ် 🙏 မေးစရာ၊ ပြဿနာရှိရင် 💬 Help Center မှာ အချိန်မရွေး ဆက်သွယ်နိုင်ပါတယ်။'
     : bad ? 'စိတ်မကောင်းပါဘူး၊ ပြဿနာတက်သွားပါတယ်။ Support ကို ဆက်သွယ်ပေးပါ၊ အမြန်ကူညီပေးပါမယ်။' : '';
   const blocks = [
     { type: 'heading', size: 3, text: ok ? '✅ Order ပြီးစီးပါပြီ' : bad ? '❌ Order မအောင်မြင်ပါ' : '🔔 Order Update' },
