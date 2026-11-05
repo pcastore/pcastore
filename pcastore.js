@@ -2606,7 +2606,10 @@ const BTN_FILL = '\u2800';
 const BTN_PX_PER_EM = 44.3; // re-calibrated from a measured 1080px screenshot (fit rms ~4px, was ~10px)
 const BTN_PAD_PX = 77.5;
 const BTN_GAP_PX = 20;
-const BTN_MAX_ROW_PX = 975; // widest row that still fits inside the bubble (real package grid = 970px)
+// Every row is padded to this ONE width, a little wider (~40px) than the bubble's inner width (970px on a 1080px phone).
+// Telegram then squeezes each row to exactly the bubble width, so every row - tab chips, package grid, game names,
+// Prev / Next, Back / Cancel - ends up with the same left and right edge. Only invisible filler overflows.
+const BTN_MAX_ROW_PX = 1010;
 const BTN_ICON_PX = 33;
 const BTN_FILL_EM = 0.673;
 const BTN_SPACE_EM = 0.278;
@@ -2636,7 +2639,7 @@ function btnEm(s) {
 // (475px button vs 580px from the width model: the figure/punctuation spaces and the dash are narrower than modelled).
 // This correction lets the package grid and every other row (tab chips, Back / Cancel, single buttons) be padded to
 // the SAME real width. If the grid still looks a few px off on your phone, tweak BTN_PKG_ADJ_PX (more negative = rows wider).
-const BTN_PKG_ADJ_PX = -105;
+const BTN_PKG_ADJ_PX = -80;
 const isSlotPkgBtn = (b) => !!(b && typeof b.text === 'string' && typeof b.callback_data === 'string' && b.callback_data.startsWith('buy:pick:') && /^[\u2800 ]*[\u2007\d]+ \u2014 /.test(b.text));
 const btnIconPx = (b) => (b && (b.url || b.web_app) ? BTN_ICON_PX : 0) + (isSlotPkgBtn(b) ? BTN_PKG_ADJ_PX : 0);
 const btnNaturalPx = (b) => BTN_PX_PER_EM * btnEm(b && b.text) + BTN_PAD_PX + btnIconPx(b);
@@ -2659,7 +2662,7 @@ function padKeyboardEven(rows) {
   rows = rows.filter((r) => Array.isArray(r) && r.length);
   const rowMax = rows.map((r) => Math.max(...r.map(btnNaturalPx)));
   const rowTotal = rows.map((r, i) => r.length * rowMax[i] + (r.length - 1) * BTN_GAP_PX);
-  const R0 = Math.min(Math.max(...rowTotal), BTN_MAX_ROW_PX); // widest row, but never wider than the bubble
+  const R0 = BTN_MAX_ROW_PX; // fixed target for every row (see BTN_MAX_ROW_PX)
   const build = (R) => rows.map((r, i) => {
     const per = Math.max(rowMax[i], (R - (r.length - 1) * BTN_GAP_PX) / r.length);
     return r.map((b) => (b && typeof b.text === 'string' ? { ...b, text: padToEm(b.text, (per - BTN_PAD_PX - btnIconPx(b)) / BTN_PX_PER_EM) } : b));
@@ -2731,13 +2734,13 @@ function pricePackageGrid(items, padCb) {
     const C = Math.max(...cells.map((c) => (c.pr.match(/,/g) || []).length));
     texts = cells.map((c) => {
       const digits = c.pr.replace(/,/g, '').length, commas = (c.pr.match(/,/g) || []).length;
-      return BTN_FILL + PKG_FIG.repeat(A - c.a.length) + c.a + ' \u2014 ' + PKG_PUNC.repeat(C - commas) + PKG_FIG.repeat(P - digits) + c.pr + ' MMK' + BTN_FILL;
+      return BTN_FILL + PKG_FIG.repeat(A - c.a.length) + c.a + ' \u2014 ' + PKG_PUNC.repeat(C - commas) + PKG_FIG.repeat(P - digits) + c.pr + ' Ks' + BTN_FILL;
     });
   } else {
-    texts = cells.map((c) => `${c.a} \u2014 ${c.pr} MMK`);
+    texts = cells.map((c) => `${c.a} \u2014 ${c.pr} Ks`);
   }
   const longest = texts.reduce((m, t) => Math.max(m, btnEm(t)), 0);
-  const cols = longest <= 13 ? 2 : 1; // two per row like before; only absurdly long labels drop to one
+  const cols = longest <= 10.5 ? 2 : 1; // two per row; labels are short (unit is "Ks"), only long package names drop to one
   let btns = texts.map((t, i) => ({ text: t, callback_data: cells[i].cb, style: 'primary' }));
   const rows = [];
   for (let i = 0; i < btns.length; i += cols) rows.push(btns.slice(i, i + cols));
