@@ -682,8 +682,8 @@ const MESSAGES = {
     en: 'Not logged in yet. Tap 🔐 Login below.',
   },
   shopPrompt: {
-    my: '🛍️ PCA Store ကို ဖွင့်ပြီး ဂိမ်း၊ Package သို့မဟုတ် Voucher ကို ရွေးချယ်ပါ။',
-    en: '🛍️ Open PCA Store and pick a game, package, or voucher.',
+    my: '🛍️ PCA Store ကို ဖွင့်ရန်',
+    en: '🛍️ Open PCA Store',
   },
   buyAccountComingSoon: {
     my: '🛒 Buy Account\n\n🚧 မကြာမီ လာမည် (Coming Soon)!\n\nဂိမ်း Account ဝယ်ယူခြင်း ဝန်ဆောင်မှုကို ပြင်ဆင်နေဆဲဖြစ်ပါသည်။ အသင့်ဖြစ်သည်နှင့် ဒီ Chat ထဲကို အကြောင်းကြားပေးပါမယ်။',
@@ -704,12 +704,12 @@ const MESSAGES = {
     en: '➕ Top Up Wallet\n\nPick an amount below, or type your own ({min} - {max} MMK)\n\nSend /cancel to stop.',
   },
   helpCenter: {
-    my: '💬 Help Center\n\nအော်ဒါ၊ ငွေပေးချေမှု သို့မဟုတ် account ပြဿနာရှိပါက Support ကို ဆက်သွယ်ပါ။',
-    en: '💬 Help Center\n\nContact Support for anything about orders, payments, or your account.',
+    my: '💬 Help Center\n\nမင်္ဂလာပါ၊ ဘာကူညီပေးရမလဲ။\nSupport ကို Order ID (သို့) Screenshot ပါ ပို့ပေးရင် ပိုမြန်မြန် စစ်ပေးနိုင်ပါတယ်။',
+    en: '💬 Help Center\n\nHi, how can we help?\nSend Support your Order ID or a screenshot so we can check faster.',
   },
   fallback: {
-    my: 'နားမလည်ပါ 🤔 အောက်က Menu ထဲကနေ ရွေးချယ်ပေးပါ။',
-    en: "Sorry, I didn't get that 🤔 Please pick an option from the menu below.",
+    my: 'နားမလည်ပါ 🤔 အောက်က Menu ထဲကနေ ရွေးချယ်ပေးပါ။ အကူအညီလိုရင် Help Center ကို နှိပ်ပါ။',
+    en: "Sorry, I didn't get that 🤔 Please pick an option from the menu below, or tap Help Center if you need a hand.",
   },
   languagePrompt: { my: '🌐 ဘာသာစကား ရွေးချယ်ပါ:', en: '🌐 Choose your language:' },
   languageSet: { my: '✅ ဘာသာစကားကို မြန်မာလို ပြောင်းလိုက်ပါပြီ။', en: '✅ Language switched to English.' },
@@ -863,8 +863,8 @@ const MESSAGES_HTML = {
     en: '🔐 <b>Not logged in yet</b>\nTap <b>🔐 Login</b> below.',
   },
   shopPrompt: {
-    my: '🛍️ <b>PCA Store</b> ကိုဖွင့်ပြီး ဂိမ်း၊ Package (သို့) Voucher ရွေးပါ။',
-    en: '🛍️ Open <b>PCA Store</b> and pick a game, package, or voucher.',
+    my: '🛍️ <b>PCA Store</b> ကို ဖွင့်ရန်',
+    en: '🛍️ Open <b>PCA Store</b>',
   },
   buyAccountComingSoon: {
     my: '🛒 <b>Buy Account</b>\n\n<blockquote>🚧 မကြာမီ လာမည် (Coming Soon)</blockquote>\nအသင့်ဖြစ်တာနဲ့ ဒီ Chat ထဲ အကြောင်းကြားပါမယ်။',
@@ -876,12 +876,12 @@ const MESSAGES_HTML = {
     en: '➕ <b>Top Up Wallet</b>\n\n<blockquote>Pick an amount below, or type your own\n<b>{min} – {max} MMK</b></blockquote>\nSend /cancel to stop.',
   },
   helpCenter: {
-    my: '💬 <b>Help Center</b>\n\n<blockquote>အော်ဒါ၊ ငွေပေးချေမှု၊ account ပြဿနာများကို Support သို့ ဆက်သွယ်ပါ။</blockquote>',
-    en: '💬 <b>Help Center</b>\n\n<blockquote>Contact Support for anything about orders, payments, or your account.</blockquote>',
+    my: '💬 <b>Help Center</b>\n\n<blockquote>မင်္ဂလာပါ၊ ဘာကူညီပေးရမလဲ။\nSupport ကို <b>Order ID</b> (သို့) <b>Screenshot</b> ပါ ပို့ပေးရင် ပိုမြန်မြန် စစ်ပေးနိုင်ပါတယ်။</blockquote>',
+    en: '💬 <b>Help Center</b>\n\n<blockquote>Hi, how can we help?\nSend Support your <b>Order ID</b> or a <b>screenshot</b> so we can check faster.</blockquote>',
   },
   fallback: {
-    my: '🤔 <b>နားမလည်ပါ</b>\nအောက်က Menu ထဲက ရွေးပါ။',
-    en: "🤔 <b>Didn't get that</b>\nPlease pick an option from the menu below.",
+    my: '🤔 <b>နားမလည်ပါ</b>\nအောက်က Menu ထဲက ရွေးပါ။ အကူအညီလိုရင် <b>Help Center</b> ကို နှိပ်ပါ။',
+    en: "🤔 <b>Didn't get that</b>\nPlease pick an option from the menu below, or tap <b>Help Center</b>.",
   },
   languagePrompt: { my: '🌐 <b>ဘာသာစကား ရွေးပါ</b>', en: '🌐 <b>Choose your language</b>' },
   languageSet: { my: '✅ <b>မြန်မာလို ပြောင်းပြီးပါပြီ</b>', en: '✅ <b>Language switched to English</b>' },
@@ -1131,7 +1131,9 @@ function stripBtnEmoji(text) {
 function applyButtonOverrides(markup) {
   const out = applyButtonOverridesBase(markup);
   if (!out || !Array.isArray(out.inline_keyboard)) return out;
-  return { ...out, inline_keyboard: out.inline_keyboard.map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b))) };
+  // Strip emoji first, then pad each row so its buttons are the same width (done last so the
+  // padding never interferes with the text-based override lookup above).
+  return { ...out, inline_keyboard: padKeyboardEven(out.inline_keyboard.map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b)))) };
 }
 function applyButtonOverridesBase(markup) {
   if (!markup || (!markup.inline_keyboard && !markup.keyboard)) return markup;
@@ -1887,11 +1889,12 @@ const FAQ_ITEMS = [
   { id: 'account', q: '🔒 Account လုံခြုံရေး' },
 ];
 
+const SUPPORT_URL = 'https://t.me/pca_gamestore';
 // Help Center: [FAQ][Track] side by side, Contact Support full width underneath.
 function helpCenterRows() {
   return [
     [{ text: '❓ FAQ', callback_data: 'faq:list' }, { text: '🔍 Track my order', callback_data: 'track:start' }],
-    [{ text: '💬 Contact Support', url: 'https://t.me/pca_gamestore' }],
+    [{ text: '💬 Contact Support', url: SUPPORT_URL }],
   ];
 }
 
@@ -1928,7 +1931,7 @@ async function handleFaqCallback(env, cq) {
     return editTelegramMessage(env, chatId, messageId, t('my', 'faqTitle'), faqListMarkup());
   }
   return editTelegramMessage(env, chatId, messageId, concatMsg(HTML_MARK + '<b>' + escapeHtml(btnLabel('in_faq_' + item.id, item.q)) + '</b>', '\n\n', t('my', 'faq_' + item.id + '_a')), {
-    inline_keyboard: [[{ text: '🔙 FAQ List', callback_data: 'faq:list' }]],
+    inline_keyboard: [[{ text: '🔙 FAQ List', callback_data: 'faq:list' }, { text: '💬 Contact Support', url: SUPPORT_URL }]],
   });
 }
 
@@ -2448,13 +2451,61 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 // same column count, chosen from the longest label: short labels -> 3 per row, medium -> 2, long -> 1.
 // Over-long labels are cut with an ellipsis and the last row is padded with inert "·" buttons so every
 // row has the same number of same-sized buttons.
+// Some Telegram clients draw inline buttons only as wide as their text, so "same count per row" is not
+// enough. Labels are therefore padded on both sides with an invisible filler (U+2800) until they have
+// the same estimated on-screen width. Tune BTN_FILL_W if pills still look uneven on your phone
+// (bigger number = fewer filler chars; smaller number = more filler chars).
+const BTN_FILL = '\u2800';
+const BTN_FILL_W = 1;
+// Rough width of a label in "average letter" units (narrow letters count less, wide ones more).
+function btnUnits(s) {
+  let w = 0;
+  for (const ch of Array.from(String(s || ''))) {
+    if (/[\u102b-\u103e\u1056-\u1059\u105e-\u1060\u1062-\u1064\u1067-\u106d\u1071-\u1074\u1082-\u108d\u108f\u109a-\u109d]/.test(ch)) continue; // Burmese marks sit on the base letter
+    if (ch === BTN_FILL) w += BTN_FILL_W;
+    else if (/[ilj.,:;'!|()\[\] \u00b7]/.test(ch)) w += 0.5;
+    else if (/[mwMW]/.test(ch)) w += 1.4;
+    else if (/[A-Z]/.test(ch)) w += 1.1;
+    else w += 1;
+  }
+  return w;
+}
+function padBtnText(text, target) {
+  const n = Math.max(0, Math.round((target - btnUnits(text)) / BTN_FILL_W / 2));
+  return n ? BTN_FILL.repeat(n) + text + BTN_FILL.repeat(n) : text;
+}
+// Link / Mini App buttons get a small arrow icon drawn by Telegram, which makes them look wider.
+const btnIconW = (b) => (b && (b.url || b.web_app) ? 1.5 : 0);
+const btnWidth = (b) => btnUnits(b && b.text) + btnIconW(b);
+// Make every button in one row the same width (a single-button row is left alone unless `forced`).
+function padRowEven(row, forced) {
+  if (!Array.isArray(row) || (row.length < 2 && !forced)) return row;
+  const target = forced || row.reduce((m, b) => Math.max(m, btnWidth(b)), 0);
+  return row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: padBtnText(b.text, target - btnIconW(b)) } : b));
+}
+// Whole keyboard: when it is small (Help Center, Back/Cancel, Prev/Next ...) every button in every row
+// gets the same width; a wide keyboard (long game names) is only equalised row by row.
+function padKeyboardEven(rows) {
+  const maxCount = rows.reduce((m, r) => Math.max(m, r.length), 0);
+  const maxW = rows.reduce((m, r) => Math.max(m, ...r.map(btnWidth)), 0);
+  if (rows.length > 1 && maxW * maxCount <= 36) return rows.map((r) => padRowEven(r, maxW));
+  return rows.map((r) => padRowEven(r));
+}
 function evenButtonGrid(btns, padCb) {
-  const len = (s) => Array.from(String(s || '')).length;
-  const longest = btns.reduce((m, b) => Math.max(m, len(b.text)), 0);
-  const cols = longest <= 12 ? 3 : longest <= 22 ? 2 : 1;
-  const maxLen = cols === 3 ? 12 : cols === 2 ? 22 : 38;
-  const cells = btns.map((b) => (len(b.text) > maxLen ? { ...b, text: Array.from(b.text).slice(0, maxLen - 1).join('') + '…' } : b));
+  const cut = (text, cap) => {
+    if (btnUnits(text) <= cap) return text;
+    let out = '';
+    for (const ch of Array.from(text)) { if (btnUnits(out + ch) > cap - 0.5) break; out += ch; }
+    return out + '…';
+  };
+  const longest = btns.reduce((m, b) => Math.max(m, btnUnits(b.text)), 0);
+  const cols = longest <= 10 ? 3 : longest <= 17 ? 2 : 1;
+  const cap = cols === 3 ? 10 : cols === 2 ? 17 : 34;
+  let cells = btns.map((b) => ({ ...b, text: cut(String(b.text || ''), cap) }));
   if (cols > 1) while (cells.length % cols) cells.push({ text: '·', callback_data: padCb || 'noop' });
+  // Same width for every button in the whole list, not just within a row.
+  const target = cells.reduce((m, b) => Math.max(m, btnUnits(b.text)), 0);
+  cells = cells.map((b) => ({ ...b, text: padBtnText(b.text, target) }));
   const rows = [];
   for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
   return rows;
