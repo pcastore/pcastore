@@ -267,6 +267,7 @@ export default {
   // behavior in the file depends on it.
   async scheduled(event, env, ctx) {
     ctx.waitUntil(warnExpiringTopupSessions(env, ctx));
+    ctx.waitUntil(sweepExpiredTempMessages(env));
   },
 };
 
@@ -1135,7 +1136,21 @@ function applyButtonOverrides(markup) {
   if (!out || !Array.isArray(out.inline_keyboard)) return out;
   // Strip emoji first, then pad each row so its buttons are the same width (done last so the
   // padding never interferes with the text-based override lookup above).
-  return { ...out, inline_keyboard: padKeyboardEven(out.inline_keyboard.map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b)))) };
+  if (!BUTTONS_IN_BUBBLE) {
+    // Classic keyboard: Telegram sizes the rows, so only strip emoji/filler - never pad.
+    return { ...out, inline_keyboard: out.inline_keyboard.filter((r) => Array.isArray(r) && r.length)
+      .map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b))) };
+  }
+  // Package (price list) rows are already built with exact, identical slots by pricePackageGrid(); stripping
+  // or re-padding them here would collapse the blank slots, so they pass through untouched.
+  const src = out.inline_keyboard.filter((r) => Array.isArray(r) && r.length);
+  const isPkgRow = (row) => row.some((b) => b && typeof b.callback_data === 'string' && b.callback_data.startsWith('buy:pick:'))
+    && row.every((b) => b && typeof b.callback_data === 'string' && /^buy:(pick:|noop$)/.test(b.callback_data));
+  const keep = src.map(isPkgRow);
+  const rest = src.filter((_, i) => !keep[i]).map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b)));
+  const padded = rest.length ? padKeyboardEven(rest) : [];
+  let k = 0;
+  return { ...out, inline_keyboard: src.map((row, i) => (keep[i] ? row : padded[k++])) };
 }
 function applyButtonOverridesBase(markup) {
   if (!markup || (!markup.inline_keyboard && !markup.keyboard)) return markup;
@@ -2161,6 +2176,81 @@ async function handleCloseCallback(env, cq) {
   return editTelegramMessage(env, chatId, messageId, '✖️ ပိတ်လိုက်ပါပြီ', null);
 }
 
+// Removes a message completely (used by Cancel / Close so no "cancelled" text is left behind).
+async function deleteBotMessage(env, chatId, messageId) {
+  if (!chatId || !messageId) return false;
+  try {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/deleteMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, message_id: messageId }),
+    });
+    const j = await res.json().catch(() => ({}));
+    return !!(j && j.ok);
+  } catch (e) { console.error('deleteMessage failed', e); return false; }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-clean: every bot screen that carries tappable (callback) buttons is remembered in
+// "botTempMessages" and deleted automatically 3 hours after it was sent by the cron sweep
+// (sweepExpiredTempMessages, called from scheduled()). Cancel also removes every earlier screen of the
+// same flow (topup / buy) at once. Optional: add a Firestore TTL policy on botTempMessages.expireAt.
+// ---------------------------------------------------------------------------
+const TEMP_MSG_TTL_MS = 3 * 60 * 60 * 1000;
+const TEMP_MSG_SWEEP_MAX = 20; // Worker subrequest budget per cron tick
+function tempMsgTag(markup) {
+  const cbs = [];
+  for (const r of (markup && Array.isArray(markup.inline_keyboard) ? markup.inline_keyboard : [])) for (const b of (r || [])) if (b && typeof b.callback_data === 'string') cbs.push(b.callback_data);
+  if (!cbs.length) return null;
+  if (cbs.some((c) => c.startsWith('adm:'))) return null; // admin panel screens are left alone
+  if (cbs.some((c) => c.startsWith('topup'))) return 'topup';
+  if (cbs.some((c) => c.startsWith('buy:'))) return 'buy';
+  return 'menu';
+}
+async function trackTempMessage(env, chatId, messageId, markup) {
+  const tag = tempMsgTag(markup);
+  if (!tag || !chatId || !messageId) return;
+  try {
+    const deleteAt = new Date(Date.now() + TEMP_MSG_TTL_MS);
+    await fsSetDoc(env, `botTempMessages/${chatId}_${messageId}`, {
+      chatId: String(chatId), messageId: String(messageId), tag, deleteAt, expireAt: new Date(deleteAt.getTime() + 24 * 60 * 60 * 1000),
+    });
+  } catch (e) { console.error('trackTempMessage failed:', e); }
+}
+async function queryTempMessages(env, filters, limit) {
+  const token = await getFirestoreAccessToken(env);
+  const projectId = firestoreProjectId(env);
+  const res = await fetch(`https://firestore.googleapis.com/v1/projects/${projectId}/databases/(default)/documents:runQuery`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: 'botTempMessages' }],
+      where: filters.length === 1 ? filters[0] : { compositeFilter: { op: 'AND', filters } }, limit } }),
+  });
+  const rows = await res.json().catch(() => []);
+  if (!res.ok || !Array.isArray(rows)) return [];
+  return rows.filter((r) => r.document).map((r) => ({
+    id: r.document.name.split('/').pop(),
+    chatId: fsField(r.document.fields, 'chatId'),
+    messageId: Number(fsField(r.document.fields, 'messageId')),
+  }));
+}
+const tmpEq = (field, v) => ({ fieldFilter: { field: { fieldPath: field }, op: 'EQUAL', value: { stringValue: String(v) } } });
+async function purgeTempDocs(env, docs) {
+  for (const d of docs) {
+    await deleteBotMessage(env, d.chatId, d.messageId); // already-deleted messages just fail quietly
+    try { await fsDeleteDoc(env, `botTempMessages/${d.id}`); } catch (e) { /* ignore */ }
+  }
+}
+// Cancel: remove every remembered screen of this flow in this chat.
+async function deleteFlowMessages(env, chatId, tag) {
+  try { await purgeTempDocs(env, await queryTempMessages(env, [tmpEq('chatId', chatId), tmpEq('tag', tag)], 15)); }
+  catch (e) { console.error('deleteFlowMessages failed:', e); }
+}
+// Cron: delete everything older than 3 hours.
+async function sweepExpiredTempMessages(env) {
+  try {
+    const due = await queryTempMessages(env, [{ fieldFilter: { field: { fieldPath: 'deleteAt' }, op: 'LESS_THAN_OR_EQUAL', value: { timestampValue: new Date().toISOString() } } }], TEMP_MSG_SWEEP_MAX);
+    await purgeTempDocs(env, due);
+  } catch (e) { console.error('sweepExpiredTempMessages failed:', e); }
+}
+
 async function startWalletTopup(env, chatId, telegramId, lang) {
   await setBotSession(env, telegramId, { step: 'awaiting_amount' });
   return sendTelegramMessage(
@@ -2335,6 +2425,8 @@ async function routeTelegramCallback(env, cq, ctx) {
     await clearBotSession(env, telegramId);
     const lang = await getLanguage(env, telegramId);
     await answerCallbackQuery(env, cq.id);
+    await deleteFlowMessages(env, chatId, 'topup'); // every earlier top-up screen
+    if (await deleteBotMessage(env, chatId, cq.message && cq.message.message_id)) return; // message disappears
     return sendTelegramMessage(env, chatId, t(lang, 'cancelled'), MAIN_KEYBOARD);
   }
 
@@ -2507,6 +2599,10 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 //   button width (px) = BTN_PX_PER_EM * text width (em) + BTN_PAD_PX   (+ BTN_ICON_PX for link / Mini App buttons)
 // Text width uses Liberation Sans advance widths (1/1000 em) for ASCII 32..126.
 // If buttons ever look a little uneven on your phone, tweak BTN_FILL_EM (width of one filler char).
+// Buttons are sent as a normal Telegram inline keyboard (under the message). Telegram itself then makes every
+// row the same full width and splits it equally, so a lone "Cancel" is exactly as wide as the pair above it and
+// no font guessing/filler is needed. Set true only to go back to the old buttons-inside-the-bubble layout.
+const BUTTONS_IN_BUBBLE = false;
 const BTN_FILL = '\u2800';
 const BTN_PX_PER_EM = 44.3; // re-calibrated from a measured 1080px screenshot (fit rms ~4px, was ~10px)
 const BTN_PAD_PX = 77.5;
@@ -2523,6 +2619,8 @@ function btnEm(s) {
     if (ch === BTN_FILL) w += BTN_FILL_EM;
     else if (c >= 32 && c <= 126) w += BTN_EM_ASCII[c - 32] / 1000;
     else if (ch === '\u00b7') w += 0.333;
+    else if (ch === '\u2007') w += 0.556; // figure space = one digit wide
+    else if (ch === '\u2008') w += 0.278; // punctuation space = comma wide
     else if (ch === '\u2026' || ch === '\u2014') w += 1;
     // Burmese: base letters ~0.9em. Marks are NOT all zero-width: the wide medials ြ (U+103C) / ျ (U+103B) and the
     // spacing vowel signs ေ ာ ါ း take real room, the rest (ိ ီ ု ူ ့ ် ွ ှ ံ ...) sit on the base letter.
@@ -2594,6 +2692,58 @@ function evenButtonGrid(btns, padCb, opts) {
   cells = cells.map((b) => ({ ...b, text: padToEm(b.text, target) }));
   const rows = [];
   for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
+  return rows;
+}
+// ---------------------------------------------------------------------------
+// PRICE LIST GRID (package buttons) - always 2 per row, every button the same width.
+// The old approach guessed each label's width from a font table and padded with filler, so two buttons in
+// a row could differ by a few pixels whenever their digit counts differed (86 vs 172, 96,700 vs 102,200).
+// Now, when every package amount is a plain number, each label is built from FIXED SLOTS:
+//   [amount slots] \u2014 [price slots] MMK
+// A missing digit is a FIGURE SPACE (U+2007 = exactly one digit wide), a missing comma is a PUNCTUATION
+// SPACE (U+2008). Every button therefore contains the same number of digit-wide cells, so it is the same
+// width on every phone/font with no calibration. The dash and the "MMK" also line up in every row.
+// U+2800 on both ends is only an edge guard so a client can never trim the blank slots.
+// Labels that are not plain numbers (e.g. "Weekly Pass") fall back to the width model, row by row.
+// ---------------------------------------------------------------------------
+const PKG_FIG = '\u2007';
+const PKG_PUNC = '\u2008';
+function pricePackageGrid(items, padCb) {
+  const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+  if (!BUTTONS_IN_BUBBLE) { // classic keyboard: 2 equal cells per row, plain labels
+    const flat = items.map((p) => ({ text: `${String(p.amount == null ? '' : p.amount).trim()} \u2014 ${fmt(p.price)} MMK`, callback_data: `buy:pick:${p.n}`, style: 'primary' }));
+    const out = [];
+    for (let i = 0; i < flat.length; i += 2) out.push(flat.slice(i, i + 2));
+    if (out.length && out[out.length - 1].length === 1) out[out.length - 1].push({ text: '\u00b7', callback_data: padCb || 'buy:noop' });
+    return out;
+  }
+  const cells = items.map((p) => ({ a: String(p.amount == null ? '' : p.amount).trim(), pr: fmt(p.price), cb: `buy:pick:${p.n}` }));
+  const numeric = cells.length > 0 && cells.every((c) => /^\d+$/.test(c.a));
+  let texts;
+  if (numeric) {
+    const A = Math.max(...cells.map((c) => c.a.length));
+    const P = Math.max(...cells.map((c) => c.pr.replace(/,/g, '').length));
+    const C = Math.max(...cells.map((c) => (c.pr.match(/,/g) || []).length));
+    texts = cells.map((c) => {
+      const digits = c.pr.replace(/,/g, '').length, commas = (c.pr.match(/,/g) || []).length;
+      return BTN_FILL + PKG_FIG.repeat(A - c.a.length) + c.a + ' \u2014 ' + PKG_PUNC.repeat(C - commas) + PKG_FIG.repeat(P - digits) + c.pr + ' MMK' + BTN_FILL;
+    });
+  } else {
+    texts = cells.map((c) => `${c.a} \u2014 ${c.pr} MMK`);
+  }
+  const longest = texts.reduce((m, t) => Math.max(m, btnEm(t)), 0);
+  const cols = longest <= 13 ? 2 : 1; // two per row like before; only absurdly long labels drop to one
+  let btns = texts.map((t, i) => ({ text: t, callback_data: cells[i].cb, style: 'primary' }));
+  const rows = [];
+  for (let i = 0; i < btns.length; i += cols) rows.push(btns.slice(i, i + cols));
+  if (cols === 2 && rows.length && rows[rows.length - 1].length === 1) {
+    const mate = rows[rows.length - 1][0];
+    rows[rows.length - 1].push({ text: padToEm('\u00b7', btnEm(mate.text)), callback_data: padCb || 'buy:noop' });
+  }
+  if (!numeric) { // mixed labels: every button in the whole list is lengthened to match the longest one
+    const target = Math.max(...rows.flat().map((b) => btnEm(b.text)));
+    for (const r of rows) for (const b of r) b.text = padToEm(b.text, target);
+  }
   return rows;
 }
 // One page of the game list: a table (No | Game | Servers) + numbered buttons.
@@ -3052,8 +3202,7 @@ async function renderBuyPriceList(env, chatId, messageId, game, backData, tabIdx
   const fallback = `🎮 ${title}\n` + (tabs.length > 1 ? `[ ${buyTabLabel(activeTab, labels)} ]\n` : '') + '\nလိုချင်တဲ့ Package ကို အောက်က ခလုတ်နှိပ်ပြီး ရွေးပါ';
   // Each button = package name + price, so there is no number to look up. Equal-width grid (every row
   // has the same number of same-sized buttons, last row padded with inert "·" buttons).
-  const pkgBtns = items.slice(0, BUY_BTN_MAX).map((p) => ({ text: `${p.amount} — ${mmk(p.price)}`, callback_data: `buy:pick:${p.n}`, style: 'primary' }));
-  const nums = evenButtonGrid(pkgBtns, 'buy:noop');
+  const nums = pricePackageGrid(items.slice(0, BUY_BTN_MAX), 'buy:noop');
   const rows = [];
   // Tab bar on top (like the store). The active tab is shown by its green colour + the heading above
   // (no "●" prefix any more: that glyph is not in the width model, so the active tab came out wider than
@@ -3066,7 +3215,7 @@ async function renderBuyPriceList(env, chatId, messageId, game, backData, tabIdx
       ...(i === ti ? { style: 'success' } : {}),
     }));
     const clean = (b) => ({ ...b, text: stripBtnEmoji(b.text) });
-    const natW = (r) => r.length * Math.max(...r.map((b) => btnNaturalPx(clean(b)))) + (r.length - 1) * BTN_GAP_PX;
+    const natW = (r) => r.length * Math.max(...r.map((b) => btnNaturalPx(b))) + (r.length - 1) * BTN_GAP_PX;
     const pkgW = nums.length ? Math.max(...nums.map(natW)) : 0;
     const tabNat = Math.max(...tabBtns.map((b) => btnNaturalPx(clean(b))));
     let per = tabBtns.length === 4 ? 2 : Math.min(3, tabBtns.length);
@@ -3090,7 +3239,7 @@ async function buyPickPackage(env, chatId, telegramId, n, messageId) {
   const game = await loadBuyGame(env, st.buy.gameId);
   const pkg = game && buyNumbered(game).find((p) => p.n === n);
   if (!pkg) return sendTelegramMessage(env, chatId, `⚠️ နံပါတ် ${n} မရှိပါ။ ပြန်ရွေးပါ။`);
-  const buy = { ...st.buy, idx: n, qty: 1 };
+  const buy = { ...st.buy, idx: n, qty: 1, lm: messageId || st.buy.lm || 0 };
   await putBuy(env, telegramId, 'buy_sure', buy);
   // One confirmation only: the old "ရွေးထားတာ သေချာပြီလား?" card is gone.
   // - game needs no ID  -> straight to the final card (price, quantity, wallet, [✅ ဝယ်မည်] = buys at once)
@@ -3288,7 +3437,13 @@ async function handleBuyCallback(env, cq, ctx) {
   await answerCallbackQuery(env, cq.id);
   if (!chatId || kind === 'noop') return;
   if (kind === 'x') {
+    let listMsg = 0;
+    try { const st0 = await getBuy(env, telegramId); listMsg = Number(st0 && st0.buy && st0.buy.lm) || 0; } catch (e) { /* ignore */ }
     await clearBotSession(env, telegramId);
+    await deleteFlowMessages(env, chatId, 'buy'); // price list, confirm card, ID prompt ...
+    const gone = await deleteBotMessage(env, chatId, messageId);
+    if (listMsg && listMsg !== messageId) await deleteBotMessage(env, chatId, listMsg); // the price list above the confirm card too
+    if (gone) return;
     return sendTelegramMessage(env, chatId, t(await getLanguage(env, telegramId), 'cancelled'), MAIN_KEYBOARD);
   }
   if (kind === 'pick') return buyPickPackage(env, chatId, telegramId, parseInt(parts[2], 10) || 0, messageId);
@@ -4106,6 +4261,7 @@ async function fsDeleteDoc(env, docPath) {
 // text + reply_markup keyboard if Telegram refuses it, so a screen is never lost.
 // ---------------------------------------------------------------------------
 function richButtonBlocks(markup) {
+  if (!BUTTONS_IN_BUBBLE) return []; // -> classic inline keyboard, equal-width rows
   if (!markup || !Array.isArray(markup.inline_keyboard)) return [];
   const rm = applyButtonOverrides(markup);
   const rows = rm && Array.isArray(rm.inline_keyboard) ? rm.inline_keyboard.filter((r) => r && r.length) : [];
@@ -4197,7 +4353,7 @@ async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
         body: JSON.stringify({ chat_id: chatId, rich_message: richMsg }),
       });
       const rd = await rr.json().catch(() => ({}));
-      if (rr.ok && rd.ok) return;
+      if (rr.ok && rd.ok) { await trackTempMessage(env, chatId, rd.result && rd.result.message_id, replyMarkup); return; }
       console.error('in-bubble send failed, using classic keyboard:', rr.status, rd && rd.description);
     } catch (e) { console.error('in-bubble send threw:', e); }
   }
@@ -4208,10 +4364,9 @@ async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      console.error('sendMessage rejected:', res.status, j && j.description);
-    }
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) console.error('sendMessage rejected:', res.status, j && j.description);
+    else await trackTempMessage(env, chatId, j && j.result && j.result.message_id, replyMarkup);
   } catch (e) {
     console.error('sendTelegramMessage failed:', e);
   }
@@ -4229,7 +4384,7 @@ async function sendTelegramMessageChecked(env, chatId, text, replyMarkup) {
       body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
-    if (res.ok) return { ok: true, messageId: data && data.result && data.result.message_id };
+    if (res.ok) { await trackTempMessage(env, chatId, data && data.result && data.result.message_id, replyMarkup); return { ok: true, messageId: data && data.result && data.result.message_id }; }
     console.error('sendTelegramMessageChecked failed:', res.status, data && data.description);
     return { ok: false, blocked: data.error_code === 403, status: res.status, description: data.description };
   } catch (e) {
@@ -4299,7 +4454,7 @@ async function sendRichChecked(env, chatId, blocks, replyMarkup, fallbackText) {
     };
     let { res, data } = btns.length ? await send({ chat_id: chatId, rich_message: { blocks: [...blocks, ...btns] } }) : await send(classic());
     if (!(res.ok && data.ok) && btns.length) { console.error('in-bubble rich send failed, using classic keyboard:', res.status, data && data.description); ({ res, data } = await send(classic())); }
-    if (res.ok && data.ok) return { ok: true, messageId: data.result && data.result.message_id };
+    if (res.ok && data.ok) { await trackTempMessage(env, chatId, data.result && data.result.message_id, replyMarkup); return { ok: true, messageId: data.result && data.result.message_id }; }
     console.error('sendRichMessage failed, using plain text:', res.status, data && data.description);
     if (data && data.error_code === 403) return { ok: false, blocked: true, status: 403 };
   } catch (e) {
