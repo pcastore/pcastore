@@ -1,14 +1,23 @@
-name = "g2bulk-function"
-main = "g2bulk-function.js"
-compatibility_date = "2026-11-01"
-workers_dev = true
+name = "pcastore"
+main = "pcastore.js"
+compatibility_date = "2025-01-01"
+keep_vars = true
+
+[triggers]
+crons = ["*/2 * * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "pca-images"
+database_id = "d6c6077e-8dbc-4f50-857b-d91e43e8f491"
+
+[placement]
+mode = "smart"
 
 [observability]
 enabled = true
 
-# Secrets (Cloudflare dashboard -> Settings -> Variables and Secrets, type "Secret"):
-#   FIREBASE_PROJECT_ID
-#   FIREBASE_CLIENT_EMAIL
-#   FIREBASE_PRIVATE_KEY
-#   G2BULK_SIGNING_SECRET   (whsec_... from G2Bulk -> API Access -> Webhooks)
-# Don't put them in this file.
+# telegram-order worker ကို တိုက်ရိုက်ခေါ်ဖို့ (workers.dev error 1042 မဖြစ်အောင်)
+[[services]]
+binding = "COUPON_WORKER"
+service = "telegram-order"
