@@ -1131,26 +1131,24 @@ function stripBtnEmoji(text) {
   const t = String(text || '').replace(/\u2800/g, '').replace(BTN_EMOJI_RE, '').replace(/\s+/g, ' ').trim();
   return t || String(text || '');
 }
-function applyButtonOverrides(markup) {
+function applyButtonOverrides(markup, classic) {
   const out = applyButtonOverridesBase(markup);
   if (!out || !Array.isArray(out.inline_keyboard)) return out;
   // Strip emoji first, then pad each row so its buttons are the same width (done last so the
   // padding never interferes with the text-based override lookup above).
-  if (!BUTTONS_IN_BUBBLE) {
-    // Classic keyboard: Telegram sizes the rows, so only strip emoji/filler - never pad.
+  if (!BUTTONS_IN_BUBBLE || classic) {
+    // Classic keyboard (fallback under the message): Telegram sizes the rows, so only strip emoji/filler - never pad.
     return { ...out, inline_keyboard: out.inline_keyboard.filter((r) => Array.isArray(r) && r.length)
       .map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b))) };
   }
-  // Package (price list) rows are already built with exact, identical slots by pricePackageGrid(); stripping
-  // or re-padding them here would collapse the blank slots, so they pass through untouched.
+  // Package (price list) rows are built with exact, identical digit slots by pricePackageGrid(): stripping
+  // would collapse those blank slots, so they only skip the strip step. They still go through the SAME final
+  // padding pass as every other row, so tab chips / package grid / Back + Cancel share one left and right edge.
   const src = out.inline_keyboard.filter((r) => Array.isArray(r) && r.length);
   const isPkgRow = (row) => row.some((b) => b && typeof b.callback_data === 'string' && b.callback_data.startsWith('buy:pick:'))
     && row.every((b) => b && typeof b.callback_data === 'string' && /^buy:(pick:|noop$)/.test(b.callback_data));
-  const keep = src.map(isPkgRow);
-  const rest = src.filter((_, i) => !keep[i]).map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b)));
-  const padded = rest.length ? padKeyboardEven(rest) : [];
-  let k = 0;
-  return { ...out, inline_keyboard: src.map((row, i) => (keep[i] ? row : padded[k++])) };
+  const cleaned = src.map((row) => (isPkgRow(row) ? row : row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b))));
+  return { ...out, inline_keyboard: padKeyboardEven(cleaned) };
 }
 function applyButtonOverridesBase(markup) {
   if (!markup || (!markup.inline_keyboard && !markup.keyboard)) return markup;
@@ -1186,7 +1184,7 @@ function applyButtonOverridesBase(markup) {
 function prepareOutgoing(payload, text, replyMarkup, parseMode) {
   if (isMarked(text)) { payload.text = unmark(text); payload.parse_mode = 'HTML'; }
   else { payload.text = text; if (parseMode) payload.parse_mode = parseMode; }
-  const rm = applyButtonOverrides(replyMarkup);
+  const rm = applyButtonOverrides(replyMarkup, true);
   if (rm) payload.reply_markup = rm;
   return payload;
 }
@@ -2075,7 +2073,7 @@ async function editOrderDetail(env, chatId, messageId, order, replyMarkup) {
     if (order.receiptUrl) more.push(['🧾 Receipt', { type: 'url', text: 'Open', url: order.receiptUrl }]);
     if (more.length) blocks.push({ type: 'details', summary: '📋 Details', is_open: false, blocks: [richKeyValueTable(more)] });
     const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
-    const rmOv = applyButtonOverrides(replyMarkup);
+    const rmOv = applyButtonOverrides(replyMarkup, true);
     if (rmOv) payload.reply_markup = rmOv;
     const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
@@ -2599,15 +2597,16 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 //   button width (px) = BTN_PX_PER_EM * text width (em) + BTN_PAD_PX   (+ BTN_ICON_PX for link / Mini App buttons)
 // Text width uses Liberation Sans advance widths (1/1000 em) for ASCII 32..126.
 // If buttons ever look a little uneven on your phone, tweak BTN_FILL_EM (width of one filler char).
-// Buttons are sent as a normal Telegram inline keyboard (under the message). Telegram itself then makes every
-// row the same full width and splits it equally, so a lone "Cancel" is exactly as wide as the pair above it and
-// no font guessing/filler is needed. Set true only to go back to the old buttons-inside-the-bubble layout.
-const BUTTONS_IN_BUBBLE = false;
+// Buttons are drawn INSIDE the message bubble (rich message "buttons" blocks, one block = one row). Telegram sizes
+// those buttons by their text only, so every row of a screen is padded (padKeyboardEven) to ONE common width:
+// tab chips, package grid, Back / Cancel and single buttons all start and end on the same left / right edge.
+// If Telegram ever refuses the rich message, the send/edit helpers fall back to a classic keyboard.
+const BUTTONS_IN_BUBBLE = true;
 const BTN_FILL = '\u2800';
 const BTN_PX_PER_EM = 44.3; // re-calibrated from a measured 1080px screenshot (fit rms ~4px, was ~10px)
 const BTN_PAD_PX = 77.5;
 const BTN_GAP_PX = 20;
-const BTN_MAX_ROW_PX = 940;
+const BTN_MAX_ROW_PX = 975; // widest row that still fits inside the bubble (real package grid = 970px)
 const BTN_ICON_PX = 33;
 const BTN_FILL_EM = 0.673;
 const BTN_SPACE_EM = 0.278;
@@ -2633,7 +2632,13 @@ function btnEm(s) {
   }
   return w;
 }
-const btnIconPx = (b) => (b && (b.url || b.web_app) ? BTN_ICON_PX : 0);
+// Package buttons ("1050 — 64,700 MMK", fixed digit slots) measured ~105px narrower on a real 1080px screenshot
+// (475px button vs 580px from the width model: the figure/punctuation spaces and the dash are narrower than modelled).
+// This correction lets the package grid and every other row (tab chips, Back / Cancel, single buttons) be padded to
+// the SAME real width. If the grid still looks a few px off on your phone, tweak BTN_PKG_ADJ_PX (more negative = rows wider).
+const BTN_PKG_ADJ_PX = -105;
+const isSlotPkgBtn = (b) => !!(b && typeof b.text === 'string' && typeof b.callback_data === 'string' && b.callback_data.startsWith('buy:pick:') && /^[\u2800 ]*[\u2007\d]+ \u2014 /.test(b.text));
+const btnIconPx = (b) => (b && (b.url || b.web_app) ? BTN_ICON_PX : 0) + (isSlotPkgBtn(b) ? BTN_PKG_ADJ_PX : 0);
 const btnNaturalPx = (b) => BTN_PX_PER_EM * btnEm(b && b.text) + BTN_PAD_PX + btnIconPx(b);
 // Pads `text` with filler on both sides so its text width becomes about `targetEm`.
 function padToEm(text, targetEm) {
@@ -2654,7 +2659,7 @@ function padKeyboardEven(rows) {
   rows = rows.filter((r) => Array.isArray(r) && r.length);
   const rowMax = rows.map((r) => Math.max(...r.map(btnNaturalPx)));
   const rowTotal = rows.map((r, i) => r.length * rowMax[i] + (r.length - 1) * BTN_GAP_PX);
-  const R0 = Math.min(Math.max(...rowTotal), BTN_MAX_ROW_PX);
+  const R0 = Math.min(Math.max(...rowTotal), BTN_MAX_ROW_PX); // widest row, but never wider than the bubble
   const build = (R) => rows.map((r, i) => {
     const per = Math.max(rowMax[i], (R - (r.length - 1) * BTN_GAP_PX) / r.length);
     return r.map((b) => (b && typeof b.text === 'string' ? { ...b, text: padToEm(b.text, (per - BTN_PAD_PX - btnIconPx(b)) / BTN_PX_PER_EM) } : b));
@@ -2738,7 +2743,7 @@ function pricePackageGrid(items, padCb) {
   for (let i = 0; i < btns.length; i += cols) rows.push(btns.slice(i, i + cols));
   if (cols === 2 && rows.length && rows[rows.length - 1].length === 1) {
     const mate = rows[rows.length - 1][0];
-    rows[rows.length - 1].push({ text: padToEm('\u00b7', btnEm(mate.text)), callback_data: padCb || 'buy:noop' });
+    rows[rows.length - 1].push({ text: '\u00b7', callback_data: padCb || 'buy:noop' }); // padKeyboardEven stretches it to mate's width
   }
   if (!numeric) { // mixed labels: every button in the whole list is lengthened to match the longest one
     const target = Math.max(...rows.flat().map((b) => btnEm(b.text)));
@@ -4442,7 +4447,7 @@ async function sendRichChecked(env, chatId, blocks, replyMarkup, fallbackText) {
     const btns = richButtonBlocks(replyMarkup);
     const classic = () => {
       const payload = { chat_id: chatId, rich_message: { blocks } };
-      const rm = applyButtonOverrides(replyMarkup);
+      const rm = applyButtonOverrides(replyMarkup, true);
       if (rm) payload.reply_markup = rm;
       return payload;
     };
@@ -4467,7 +4472,7 @@ async function editRichChecked(env, chatId, messageId, blocks, replyMarkup, fall
     const btns = richButtonBlocks(replyMarkup);
     const classic = () => {
       const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
-      const rm = applyButtonOverrides(replyMarkup);
+      const rm = applyButtonOverrides(replyMarkup, true);
       if (rm) payload.reply_markup = rm;
       return payload;
     };
