@@ -452,8 +452,8 @@ function topupAmountRows(page) {
     return rows;
   }
   const rows = [];
-  for (let i = 0; i < TOPUP_QUICK_AMOUNTS.length; i += 2) rows.push(TOPUP_QUICK_AMOUNTS.slice(i, i + 2).map(btn));
-  rows[rows.length - 1].push({ text: '➕ More', callback_data: 'topup_amt_page:2' });
+  const cells = [...TOPUP_QUICK_AMOUNTS.map(btn), { text: '➕ More', callback_data: 'topup_amt_page:2' }]; // 7 + More = 8 = 4 even rows of 2
+  for (let i = 0; i < cells.length; i += 2) rows.push(cells.slice(i, i + 2));
   return rows;
 }
 
@@ -482,6 +482,12 @@ function gridRows(buttons, perRow = 2, maxLen = 22) {
     if (cur.length === perRow) flush();
   }
   flush();
+  // Odd leftover: pad with an inert "·" button so the last row is the same width as the rest
+  // (only when there is more than one row - a lone button stays full width).
+  if (rows.length > 1 && perRow > 1) {
+    const last = rows[rows.length - 1];
+    while (last.length < perRow) last.push({ text: '·', callback_data: 'noop' });
+  }
   return rows;
 }
 
@@ -1039,12 +1045,53 @@ function btnLabel(id, def) { const o = CUSTOM.buttons && CUSTOM.buttons[id]; ret
 
 // A tapped reply-keyboard button arrives as plain text. If the admin renamed
 // it, map the custom label back to the default text the router matches on.
+// ---------------------------------------------------------------------------
+// No emoji anywhere: every outgoing Telegram request has its human-visible text (message text, captions,
+// button labels, rich-message blocks, popups) cleaned just before it is sent. callback_data, URLs and
+// ids are never touched. Incoming menu taps still route (see kbCanon below).
+// ---------------------------------------------------------------------------
+const EMOJI_RUN_RE = /[0-9#*]\ufe0f?\u20e3 ?|[\p{Extended_Pictographic}\p{Regional_Indicator}‍︎️⃣]+ ?/gu;
+function stripEmojiText(s) { return String(s).replace(EMOJI_RUN_RE, ''); }
+const TG_TEXT_KEYS = new Set(['text', 'caption', 'summary', 'title', 'html', 'input_field_placeholder']);
+function stripEmojiDeep(v, inText) {
+  if (typeof v === 'string') return inText ? stripEmojiText(v) : v;
+  if (Array.isArray(v)) return v.map((x) => stripEmojiDeep(x, inText));
+  if (v && typeof v === 'object') {
+    const o = {};
+    for (const k of Object.keys(v)) o[k] = stripEmojiDeep(v[k], TG_TEXT_KEYS.has(k));
+    return o;
+  }
+  return v;
+}
+function tgFetch(url, init) {
+  try {
+    if (init && typeof init.body === 'string' && init.body.charAt(0) === '{') {
+      init = { ...init, body: JSON.stringify(stripEmojiDeep(JSON.parse(init.body), false)) };
+    }
+  } catch (e) { /* send as-is */ }
+  return fetch(url, init);
+}
+// Reply-keyboard taps arrive WITHOUT the emoji now ("Game List"); map them back to the canonical label
+// the router matches on. Old keyboards still cached on a phone (with emoji) keep matching exactly.
+let kbCanonMap = null;
+function kbCanon(text) {
+  if (!kbCanonMap) {
+    kbCanonMap = new Map();
+    const labels = [];
+    MAIN_KEYBOARD.keyboard.forEach((r) => r.forEach((b) => labels.push(b.text)));
+    MAIN_MENU_TEXTS.forEach((x) => labels.push(x));
+    labels.forEach((l) => { const k = stripEmojiText(l).trim(); if (k && !kbCanonMap.has(k)) kbCanonMap.set(k, l); });
+  }
+  const hit = kbCanonMap.get(stripEmojiText(text).trim());
+  return hit || text;
+}
+
 function kbNormalize(text) {
   const b = CUSTOM.buttons || {};
   for (const c of BUTTON_CATALOG) {
     if (c.kind === 'kb' && b[c.id] && b[c.id].label === text) return c.def;
   }
-  return text;
+  return kbCanon(text);
 }
 
 // Button colours (Bot API 9.4 `style`: primary = blue, success = green, danger = red).
@@ -1074,7 +1121,19 @@ function styleInlineKeyboard(markup) {
   return { ...markup, inline_keyboard: rows };
 }
 
+// Inline-button labels are plain text (no emoji). Reply-keyboard buttons keep theirs: the menu router
+// matches on their exact text. Admin-customised icon_custom_emoji_id is left alone.
+const BTN_EMOJI_RE = /[\p{Extended_Pictographic}\p{Regional_Indicator}\u200d\ufe0e\ufe0f\u20e3]/gu;
+function stripBtnEmoji(text) {
+  const t = String(text || '').replace(BTN_EMOJI_RE, '').replace(/\s+/g, ' ').trim();
+  return t || String(text || '');
+}
 function applyButtonOverrides(markup) {
+  const out = applyButtonOverridesBase(markup);
+  if (!out || !Array.isArray(out.inline_keyboard)) return out;
+  return { ...out, inline_keyboard: out.inline_keyboard.map((row) => row.map((b) => (b && typeof b.text === 'string' ? { ...b, text: stripBtnEmoji(b.text) } : b))) };
+}
+function applyButtonOverridesBase(markup) {
   if (!markup || (!markup.inline_keyboard && !markup.keyboard)) return markup;
   if (markup.inline_keyboard) markup = styleInlineKeyboard(markup);
   const ovs = CUSTOM.buttons || {};
@@ -1663,6 +1722,14 @@ async function routeTelegramMessage(env, msg) {
   if (session && typeof session.step === 'string' && session.step.startsWith('admin_') && isAdmin(env, telegramId)) {
     return handleAdminInput(env, chatId, telegramId, msg, session);
   }
+  if (session && typeof session.step === 'string' && session.step.startsWith('buy_') && text) {
+    if (MAIN_MENU_TEXTS.has(text)) {
+      await clearBotSession(env, telegramId);
+      // fall through to normal command/menu routing below
+    } else {
+      return handleBuyText(env, chatId, telegramId, text, session);
+    }
+  }
   if (session && session.step === 'awaiting_amount' && text) {
     if (MAIN_MENU_TEXTS.has(text)) {
       await clearBotSession(env, telegramId);
@@ -2000,7 +2067,7 @@ async function editOrderDetail(env, chatId, messageId, order, replyMarkup) {
     const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
     const rmOv = applyButtonOverrides(replyMarkup);
     if (rmOv) payload.reply_markup = rmOv;
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
     });
     const j = await res.json();
@@ -2095,6 +2162,10 @@ async function routeTelegramCallback(env, cq, ctx) {
     return startWalletTopup(env, chatId, telegramId, lang);
   }
 
+  if (data === 'noop') return answerCallbackQuery(env, cq.id);
+  if (data.startsWith('buy:')) {
+    return handleBuyCallback(env, cq, ctx);
+  }
   if (data.startsWith('gl:')) {
     return handleGameListCallback(env, cq);
   }
@@ -2369,20 +2440,44 @@ async function submitTopupReceipt(env, ctx, chatId, telegramId, fileId, session,
 // ---------------------------------------------------------------------------
 // "🎮 Game List" goes straight to the game list (Top Up + Voucher together) -
 // no Top Up/Voucher or genre step in between.
+// Equal-width numbered grid for a list of buttons: picks 6/5/4/3 columns with the fewest empty cells,
+// pads the last row with inert buttons.
+function evenNumberGrid(btns) {
+  let cols = 6, best = 99;
+  for (const c of [6, 5, 4, 3]) { const gap = (c - (btns.length % c)) % c; if (gap < best) { best = gap; cols = c; } }
+  const cells = btns.slice();
+  while (cells.length % cols) cells.push({ text: '·', callback_data: 'noop' });
+  const rows = [];
+  for (let i = 0; i < cells.length; i += cols) rows.push(cells.slice(i, i + cols));
+  return rows;
+}
+// One page of the game list: a table (No | Game | Servers) + numbered buttons.
+function groupListContent(header, groups, cat, genre, page) {
+  const maxPage = Math.max(0, Math.ceil(groups.length / GAME_LIST_PAGE_SIZE) - 1);
+  const pg = Math.min(Math.max(page, 0), maxPage);
+  const start = pg * GAME_LIST_PAGE_SIZE;
+  const slice = groups.slice(start, start + GAME_LIST_PAGE_SIZE);
+  const rich = [
+    { type: 'heading', size: 3, text: header },
+    richTable(slice.map((g, i) => [String(start + i + 1), g.name, String(g.ids.length)]), { header: ['No', 'Game', 'Servers'] }),
+    { type: 'paragraph', text: `Page ${pg + 1}/${maxPage + 1} - ${groups.length} games. ဂိမ်းနံပါတ်ကို နှိပ်ပါ။` },
+  ];
+  const text = `${header}\n\n` + slice.map((g, i) => `${start + i + 1}. ${g.name}${g.ids.length > 1 ? ` (${g.ids.length})` : ''}`).join('\n');
+  return { text, rich, markup: buildGroupListPage(cat, genre, groups, pg) };
+}
+async function showContent(env, chatId, messageId, c) {
+  if (c.rich) return messageId ? editRichChecked(env, chatId, messageId, c.rich, c.markup, c.text) : sendRichChecked(env, chatId, c.rich, c.markup, c.text);
+  return messageId ? editTelegramMessage(env, chatId, messageId, c.text, c.markup) : sendTelegramMessage(env, chatId, c.text, c.markup);
+}
 async function gameListAllContent(env, page) {
   const [games, flags] = await Promise.all([listGamesRaw(env), getProviderFlags(env)]);
   const groups = buildGameGroupsForCategory(games, flags, 'all', 'all');
   const header = GAME_LIST_CATEGORIES.all;
   if (!groups.length) return { text: t('my', 'noGames', { header }), markup: { inline_keyboard: [] } };
-  const maxPage = Math.max(0, Math.ceil(groups.length / GAME_LIST_PAGE_SIZE) - 1);
-  return {
-    text: t('my', 'pickGame', { header, count: groups.length }),
-    markup: buildGroupListPage('all', 'all', groups, Math.min(Math.max(page, 0), maxPage)),
-  };
+  return groupListContent(header, groups, 'all', 'all', page);
 }
 async function sendGameListCategoryMenu(env, chatId) {
-  const { text, markup } = await gameListAllContent(env, 0);
-  return sendTelegramMessage(env, chatId, text, markup);
+  return showContent(env, chatId, null, await gameListAllContent(env, 0));
 }
 function genreBackRows(cat) {
   return cat === 'all' ? [] : [[{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]];
@@ -2524,13 +2619,18 @@ function buildGenreMenuMarkup(cat) {
 function buildGroupListPage(cat, genre, groups, page) {
   const start = page * GAME_LIST_PAGE_SIZE;
   const pageGroups = groups.slice(start, start + GAME_LIST_PAGE_SIZE);
+  // Numbered buttons (4 per row, padded to an even grid); the table in the message says which number is which game.
   const rows = gridRows(pageGroups.map((g, i) => ({
-    text: g.ids.length > 1 ? `${g.name} (${g.ids.length})` : g.name,
+    text: String(start + i + 1),
     callback_data: `gl:g:${cat}:${genre}:${page}:${start + i}`,
-  })), 2, 22);
+    style: 'primary',
+  })), 4, 22);
   const navRow = [];
+  const hasNext = start + GAME_LIST_PAGE_SIZE < groups.length;
   if (page > 0) navRow.push({ text: '⬅️ Prev', callback_data: `gl:c:${cat}:${genre}:${page - 1}` });
-  if (start + GAME_LIST_PAGE_SIZE < groups.length) navRow.push({ text: 'Next ➡️', callback_data: `gl:c:${cat}:${genre}:${page + 1}` });
+  else if (hasNext) navRow.push({ text: '·', callback_data: 'noop' });
+  if (hasNext) navRow.push({ text: 'Next ➡️', callback_data: `gl:c:${cat}:${genre}:${page + 1}` });
+  else if (page > 0) navRow.push({ text: '·', callback_data: 'noop' });
   if (navRow.length) rows.push(navRow);
   if (cat !== 'all') rows.push([{ text: '🔙 Genre', callback_data: `gl:genre:${cat}` }]);
   return { inline_keyboard: rows };
@@ -2556,8 +2656,7 @@ async function handleGameListCallback(env, cq) {
 
   if (kind === 'catmenu') {
     await answerCallbackQuery(env, cq.id);
-    const c = await gameListAllContent(env, 0);
-    return editTelegramMessage(env, chatId, messageId, c.text, c.markup);
+    return showContent(env, chatId, messageId, await gameListAllContent(env, 0));
   }
 
   // 'genre' and 'c'/'g'/'s' all need the freshly-recomputed group list for
@@ -2566,15 +2665,13 @@ async function handleGameListCallback(env, cq) {
   const cat = parts[2];
   if (cat !== 'all' && cat !== 'topup' && cat !== 'voucher') {
     await answerCallbackQuery(env, cq.id);
-    const c = await gameListAllContent(env, 0);
-    return editTelegramMessage(env, chatId, messageId, c.text, c.markup);
+    return showContent(env, chatId, messageId, await gameListAllContent(env, 0));
   }
   const catLabel = GAME_LIST_CATEGORIES[cat];
 
   if (kind === 'genre') {
     await answerCallbackQuery(env, cq.id);
-    const c = await gameListAllContent(env, 0);
-    return editTelegramMessage(env, chatId, messageId, c.text, c.markup);
+    return showContent(env, chatId, messageId, await gameListAllContent(env, 0));
   }
 
   // 'c', 'g' and 's' all carry the selected genre ('all' or a GAME_GENRES
@@ -2600,11 +2697,7 @@ async function handleGameListCallback(env, cq) {
         inline_keyboard: genreBackRows(cat),
       });
     }
-    return editTelegramMessage(
-      env, chatId, messageId,
-      t('my', 'pickGame', { header: headerLabel, count: groups.length }),
-      buildGroupListPage(cat, genre, groups, page)
-    );
+    return showContent(env, chatId, messageId, groupListContent(headerLabel, groups, cat, genre, page));
   }
 
   if (kind === 'g') {
@@ -2620,14 +2713,23 @@ async function handleGameListCallback(env, cq) {
       });
     }
     if (group.ids.length <= 1) {
-      return sendOpenAppMessage(env, chatId, messageId, group.name, group.ids[0], { text: '🔙 Back', callback_data: `gl:c:${cat}:${genre}:${page}` });
+      return beginBuyFlow(env, chatId, messageId, String(cq.from.id), group.ids[0], `gl:c:${cat}:${genre}:${page}`);
     }
     // Multi-server game (e.g. "Mobile Legends (9)") — list every
     // server/region variant so the person can pick the exact one before
     // the Mini App opens straight into it.
-    const rows = group.servers.map((s, i) => [{ text: s, callback_data: `gl:s:${cat}:${genre}:${page}:${idx}:${i}` }]);
-    rows.push([{ text: '🔙 Back', callback_data: `gl:c:${cat}:${genre}:${page}` }]);
-    return editTelegramMessage(env, chatId, messageId, t('my', 'pickServer', { name: group.name }), { inline_keyboard: rows });
+    const srvBtns = group.servers.slice(0, 60).map((sv, i) => ({ text: String(i + 1), callback_data: `gl:s:${cat}:${genre}:${page}:${idx}:${i}`, style: 'primary' }));
+    const srvRows = evenNumberGrid(srvBtns);
+    srvRows.push([{ text: 'Back', callback_data: `gl:c:${cat}:${genre}:${page}` }]);
+    return showContent(env, chatId, messageId, {
+      text: t('my', 'pickServer', { name: group.name }),
+      rich: [
+        { type: 'heading', size: 3, text: group.name },
+        richTable(group.servers.slice(0, 60).map((sv, i) => [String(i + 1), sv]), { header: ['No', 'Server / Region'] }),
+        { type: 'paragraph', text: 'Server နံပါတ်ကို နှိပ်ပါ။' },
+      ],
+      markup: { inline_keyboard: srvRows },
+    });
   }
 
   if (kind === 's') {
@@ -2644,11 +2746,350 @@ async function handleGameListCallback(env, cq) {
         inline_keyboard: genreBackRows(cat),
       });
     }
-    const label = group.servers[sIdx] || group.name;
-    return sendOpenAppMessage(env, chatId, messageId, label, gameId, { text: '🔙 Back', callback_data: `gl:g:${cat}:${genre}:${page}:${idx}` });
+    return beginBuyFlow(env, chatId, messageId, String(cq.from.id), gameId, `gl:g:${cat}:${genre}:${page}:${idx}`);
   }
 
   return answerCallbackQuery(env, cq.id);
+}
+
+// ---------------------------------------------------------------------------
+// In-chat BUY flow (wallet only):
+//   Game List -> game (-> server) -> price table -> send a number (or tap it)
+//   -> "sure?" -> In-Game ID (+Server ID, any separator) -> name check ->
+//   wallet summary -> "Buy now" -> order is created through the order Worker's
+//   /bot-create-order (same checks as the website) and wallet auto-fulfils.
+// State lives in telegramBotSessions/{id}: step = buy_pick | buy_sure | buy_id | buy_final | buy_busy,
+// buy = JSON string { gameId, back, idx, playerId, serverId, name, reqId }.
+// ---------------------------------------------------------------------------
+const BUY_BTN_MAX = 60;
+let buyCatCache = null;
+let buyCatCacheAt = 0;
+const BUY_CAT_TTL_MS = 2 * 60 * 1000;
+
+function fsDecodeValue(v) {
+  if (!v || typeof v !== 'object') return undefined;
+  if ('stringValue' in v) return v.stringValue;
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return v.doubleValue;
+  if ('booleanValue' in v) return v.booleanValue;
+  if ('arrayValue' in v) return ((v.arrayValue && v.arrayValue.values) || []).map(fsDecodeValue);
+  if ('mapValue' in v) return fsDecodeMap((v.mapValue && v.mapValue.fields) || {});
+  return undefined;
+}
+function fsDecodeMap(fields) {
+  const o = {};
+  for (const k of Object.keys(fields || {})) o[k] = fsDecodeValue(fields[k]);
+  return o;
+}
+
+// Only what the buy flow needs from a public game doc.
+function slimBuyGame(id, g) {
+  g = g || {};
+  const pk = (Array.isArray(g.packages) ? g.packages : []).filter((p) => p && typeof p === 'object' && p.amount !== undefined)
+    .map((p) => ({
+      amount: String(p.amount), price: Number(p.price) || 0, tab: String(p.tab || p.type || 'currency'),
+      g2bulk: p.g2bulk || '', jcplays: p.jcplays || '', voucherId: p.voucherId || '',
+      fazercardOfferId: p.fazercardOfferId || '', fazercardGiftCardId: p.fazercardGiftCardId || '',
+    }));
+  return {
+    id, name: g.name || '', serverName: g.serverName || '', fulfillProvider: g.fulfillProvider || '',
+    g2bulkCode: g.g2bulkCode || '', jcplaysProduct: g.jcplaysProduct || '',
+    fazercardCategoryId: g.fazercardCategoryId || '', fazercardGiftCategoryId: g.fazercardGiftCategoryId || '',
+    playerIdRequired: g.playerIdRequired !== false, serverIdRequired: g.serverIdRequired !== false,
+    packages: pk,
+  };
+}
+
+async function loadBuyGame(env, gameId) {
+  const now = Date.now();
+  if (!buyCatCache || now - buyCatCacheAt > BUY_CAT_TTL_MS) {
+    try {
+      const token = await getFirestoreAccessToken(env);
+      const base = `https://firestore.googleapis.com/v1/projects/${firestoreProjectId(env)}/databases/(default)/documents`;
+      const res = await fetch(`${base}/catalogPublic?pageSize=20`, { headers: { Authorization: `Bearer ${token}` } });
+      if (res.ok) {
+        const data = await res.json();
+        const map = new Map();
+        for (const d of data.documents || []) {
+          const raw = d.fields ? fsField(d.fields, 'json') : '';
+          if (!raw) continue;
+          const o = JSON.parse(raw);
+          Object.keys(o).forEach((id) => map.set(id, slimBuyGame(id, o[id])));
+        }
+        if (map.size) { buyCatCache = map; buyCatCacheAt = now; }
+      }
+    } catch (e) { console.error('loadBuyGame catalogue failed', e); }
+  }
+  if (buyCatCache && buyCatCache.has(gameId)) return buyCatCache.get(gameId);
+  try { // fallback: the single public mirror doc
+    const token = await getFirestoreAccessToken(env);
+    const base = `https://firestore.googleapis.com/v1/projects/${firestoreProjectId(env)}/databases/(default)/documents`;
+    const res = await fetch(`${base}/gamesPublic/${encodeURIComponent(gameId)}`, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) { const d = await res.json(); return slimBuyGame(gameId, fsDecodeMap(d.fields || {})); }
+  } catch (e) { console.error('loadBuyGame fallback failed', e); }
+  return null;
+}
+
+const BUY_TAB_LABELS = { currency: 'Currency', package: 'Package', pass: 'Pass' };
+function buyTabLabel(tab) {
+  const k = String(tab || 'currency');
+  return BUY_TAB_LABELS[k.toLowerCase()] || k;
+}
+// Same order the store shows: packages as saved, numbered 1..N across all tabs.
+function buyNumbered(game) {
+  return game.packages.map((p, i) => ({ ...p, n: i + 1 }));
+}
+const mmk = (n) => `${Number(n || 0).toLocaleString()} MMK`;
+const BUY_CANCEL_ROW = [{ text: '❌ Cancel', callback_data: 'buy:x', style: 'danger' }];
+
+async function getBuy(env, telegramId, steps) {
+  const s = await getBotSession(env, telegramId);
+  if (!s || typeof s.step !== 'string' || !s.step.startsWith('buy_')) return null;
+  if (steps && !steps.includes(s.step)) return { stale: true, step: s.step };
+  let buy = {};
+  try { buy = JSON.parse(s.buy || '{}'); } catch (e) { buy = {}; }
+  return { step: s.step, buy };
+}
+const putBuy = (env, telegramId, step, buy) => setBotSession(env, telegramId, { step, buy: JSON.stringify(buy) });
+
+// Entry point from Game List (replaces the old "open the app" message).
+async function beginBuyFlow(env, chatId, messageId, telegramId, gameId, backData) {
+  const game = await loadBuyGame(env, gameId);
+  if (!game || !game.packages.length) {
+    return editTelegramMessage(env, chatId, messageId, '⚠️ ဒီဂိမ်းမှာ Package မရှိသေးပါ။', { inline_keyboard: backData ? [[{ text: '🔙 Back', callback_data: backData }]] : [] });
+  }
+  await putBuy(env, telegramId, 'buy_pick', { gameId, back: backData || '' });
+  return renderBuyPriceList(env, chatId, messageId, game, backData);
+}
+
+async function renderBuyPriceList(env, chatId, messageId, game, backData) {
+  const items = buyNumbered(game);
+  const tabs = [...new Set(items.map((p) => p.tab))];
+  const title = game.serverName && game.serverName !== game.name ? `${game.name} — ${game.serverName}` : game.name;
+  const blocks = [{ type: 'heading', size: 3, text: `🎮 ${title}` }];
+  tabs.forEach((tab) => {
+    if (tabs.length > 1) blocks.push({ type: 'heading', size: 4, text: buyTabLabel(tab) });
+    blocks.push(richTable(items.filter((p) => p.tab === tab).map((p) => [String(p.n), p.amount, mmk(p.price)]), { header: ['No', 'Package', 'Price'] }));
+  });
+  blocks.push({ type: 'paragraph', text: '🔢 လိုချင်တဲ့ နံပါတ်ကို ရိုက်ပို့ပါ (သို့) အောက်က နံပါတ်ကို နှိပ်ပါ' });
+  const fallback = `🎮 ${title}\n\n` + items.map((p) => `${p.n}. ${p.amount} — ${mmk(p.price)}`).join('\n') + '\n\n🔢 နံပါတ်ကို ရိုက်ပို့ပါ (သို့) အောက်က နံပါတ်ကို နှိပ်ပါ';
+  const nums = items.slice(0, BUY_BTN_MAX).map((p) => ({ text: String(p.n), callback_data: `buy:pick:${p.n}`, style: 'primary' }));
+  // Equal-width grid: pick the column count (6/5/4/3) that leaves the fewest empty cells, then pad the
+  // last row with inert "·" buttons so every row has the same number of same-sized buttons.
+  let cols = 6, bestGap = 99;
+  for (const c of [6, 5, 4, 3]) { const gap = (c - (nums.length % c)) % c; if (gap < bestGap) { bestGap = gap; cols = c; } }
+  while (nums.length % cols) nums.push({ text: '·', callback_data: 'buy:noop' });
+  const rows = [];
+  for (let i = 0; i < nums.length; i += cols) rows.push(nums.slice(i, i + cols));
+  const last = [];
+  if (backData) last.push({ text: '🔙 Back', callback_data: backData });
+  last.push(BUY_CANCEL_ROW[0]);
+  rows.push(last);
+  const markup = { inline_keyboard: rows };
+  if (messageId) return editRichChecked(env, chatId, messageId, blocks, markup, fallback);
+  return sendRichChecked(env, chatId, blocks, markup, fallback);
+}
+
+async function buyPickPackage(env, chatId, telegramId, n, messageId) {
+  const st = await getBuy(env, telegramId, ['buy_pick', 'buy_sure']);
+  if (!st || st.stale) return sendTelegramMessage(env, chatId, '⌛ Session ကုန်သွားပါပြီ။ 🎮 Game List ကနေ ပြန်စပါ။', MAIN_KEYBOARD);
+  const game = await loadBuyGame(env, st.buy.gameId);
+  const pkg = game && buyNumbered(game).find((p) => p.n === n);
+  if (!pkg) return sendTelegramMessage(env, chatId, `⚠️ နံပါတ် ${n} မရှိပါ။ ပြန်ရွေးပါ။`);
+  await putBuy(env, telegramId, 'buy_sure', { ...st.buy, idx: n });
+  const blocks = [
+    { type: 'heading', size: 3, text: '🛒 ရွေးထားတာ သေချာပြီလား?' },
+    richKeyValueTable([['🎮 Game', game.serverName && game.serverName !== game.name ? `${game.name} (${game.serverName})` : game.name], ['📦 Package', pkg.amount], ['💰 Price', mmk(pkg.price)]]),
+  ];
+  const markup = { inline_keyboard: [
+    [{ text: '✅ သေချာပြီ', callback_data: 'buy:ok', style: 'success' }, { text: '🔄 ပြန်ရွေးမည်', callback_data: 'buy:chg', style: 'primary' }],
+    BUY_CANCEL_ROW,
+  ] };
+  return sendRichChecked(env, chatId, blocks, markup, `🛒 ရွေးထားတာ သေချာပြီလား?\n\n🎮 ${game.name}\n📦 ${pkg.amount}\n💰 ${mmk(pkg.price)}`);
+}
+
+function buyNeeds(game) {
+  const player = game.playerIdRequired !== false;
+  return { player, server: player && game.serverIdRequired !== false };
+}
+
+async function buyAskId(env, chatId, telegramId, st) {
+  const game = await loadBuyGame(env, st.buy.gameId);
+  const need = game ? buyNeeds(game) : { player: true, server: true };
+  await putBuy(env, telegramId, 'buy_id', st.buy);
+  const eg = need.server
+    ? '<code>123456789 12001</code>\n<code>123456789(12001)</code>\n<code>123456789,12001</code>\n\nID နဲ့ Server ID ကြားမှာ space ဒါမှမဟုတ် သင်္ကေတ ဘာထည့်ထည့် ရပါတယ်။'
+    : '<code>123456789</code>';
+  return sendTelegramMessage(env, chatId,
+    `🆔 <b>${need.server ? 'Game ID နဲ့ Server ID' : 'Game ID'}</b> ကို ရိုက်ပို့ပါ\n\n${eg}`,
+    { inline_keyboard: [[{ text: '🔙 Package ပြန်ရွေး', callback_data: 'buy:chg' }, BUY_CANCEL_ROW[0]]] }, 'HTML');
+}
+
+// "123456789(12001)", "123456789 12001", "123456789,12001" ... -> { playerId, serverId }
+function parseBuyId(text, needServer) {
+  const raw = String(text || '').trim();
+  if (!needServer) {
+    const id = raw.replace(/\s+/g, '').replace(/[^A-Za-z0-9_.\-@#]/g, '').slice(0, 40);
+    return id ? { playerId: id, serverId: '' } : null;
+  }
+  const tokens = raw.match(/[A-Za-z0-9_]+/g) || [];
+  if (tokens.length < 2) return null;
+  return { playerId: tokens[0].slice(0, 40), serverId: tokens[1].slice(0, 40) };
+}
+
+async function buyCheckName(game, playerId, serverId) {
+  if (!game.g2bulkCode) return { ok: true, name: '' };
+  try {
+    const res = await fetch('https://api.g2bulk.com/v1/games/checkPlayerId', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ game: String(game.g2bulkCode), user_id: playerId, server_id: serverId || undefined }),
+    });
+    if (!res.ok) return { ok: false, retry: true };
+    const data = await res.json();
+    if (data && data.valid === 'valid') return { ok: true, name: String(data.name || '').slice(0, 80) };
+    return { ok: false };
+  } catch (e) { return { ok: false, retry: true }; }
+}
+
+async function handleBuyText(env, chatId, telegramId, text, session) {
+  const st = await getBuy(env, telegramId);
+  if (!st) return sendTelegramMessage(env, chatId, '⌛ Session ကုန်သွားပါပြီ။ 🎮 Game List ကနေ ပြန်စပါ။', MAIN_KEYBOARD);
+  if (st.step === 'buy_pick' || st.step === 'buy_sure') {
+    const m = /^#?\s*(\d{1,3})\s*$/.exec(text);
+    if (!m) return sendTelegramMessage(env, chatId, '🔢 Package နံပါတ်ကိုပဲ ရိုက်ပို့ပါ (ဥပမာ 3)။');
+    return buyPickPackage(env, chatId, telegramId, parseInt(m[1], 10));
+  }
+  if (st.step === 'buy_id') {
+    const game = await loadBuyGame(env, st.buy.gameId);
+    if (!game) return sendTelegramMessage(env, chatId, '⚠️ ဂိမ်းမတွေ့တော့ပါ။ ပြန်စပါ။', MAIN_KEYBOARD);
+    const need = buyNeeds(game);
+    const parsed = parseBuyId(text, need.server);
+    if (!parsed) return sendTelegramMessage(env, chatId, need.server ? '⚠️ Game ID နဲ့ Server ID နှစ်ခုလုံး ထည့်ပါ။ ဥပမာ <code>123456789 12001</code>' : '⚠️ Game ID ကို ပြန်ထည့်ပါ။', undefined, 'HTML');
+    const chk = await buyCheckName(game, parsed.playerId, parsed.serverId);
+    if (!chk.ok) {
+      return sendTelegramMessage(env, chatId, chk.retry ? '⚠️ Name check ခဏမရနိုင်ပါ။ ခဏနေ ID ပြန်ပို့ပါ။' : '❌ ID မတွေ့ပါ။ Game ID / Server ID ပြန်စစ်ပြီး ပြန်ပို့ပါ။');
+    }
+    const buy = { ...st.buy, playerId: parsed.playerId, serverId: parsed.serverId, name: chk.name || '' };
+    return buyShowFinal(env, chatId, telegramId, buy, game);
+  }
+  return sendTelegramMessage(env, chatId, '👆 အပေါ်က button ကို နှိပ်ပါ။');
+}
+
+async function buyShowFinal(env, chatId, telegramId, buy, game) {
+  game = game || await loadBuyGame(env, buy.gameId);
+  const pkg = game && buyNumbered(game).find((p) => p.n === buy.idx);
+  const acct = await lookupAccountByTelegramId(env, telegramId);
+  if (!game || !pkg || !acct) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။ 🎮 Game List ကနေ ရွေးပါ။', MAIN_KEYBOARD);
+  buy = { ...buy, reqId: buy.reqId || ('b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8)) };
+  await putBuy(env, telegramId, 'buy_final', buy);
+  const bal = Number(acct.walletBalance || 0);
+  const enough = bal >= pkg.price;
+  const need = buyNeeds(game);
+  const rows = [
+    ['🎮 Game', game.serverName && game.serverName !== game.name ? `${game.name} (${game.serverName})` : game.name],
+    ['📦 Package', pkg.amount],
+    need.player ? ['🆔 ID', `${buy.playerId}${buy.serverId ? ` (${buy.serverId})` : ''}`] : null,
+    buy.name ? ['👤 Name', buy.name] : null,
+    ['💰 Price', mmk(pkg.price)],
+    ['💼 Wallet', mmk(bal)],
+    enough ? ['➖ ကျန်ငွေ', mmk(bal - pkg.price)] : ['⚠️ လိုငွေ', mmk(pkg.price - bal)],
+  ].filter(Boolean);
+  const blocks = [{ type: 'heading', size: 3, text: '💼 Wallet ဖြင့် ဝယ်ယူမည်' }, richKeyValueTable(rows)];
+  const kb = [];
+  if (enough) kb.push([{ text: '✅ ဝယ်မည်', callback_data: 'buy:go', style: 'success' }]);
+  else kb.push([{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }]);
+  if (need.player) kb.push([{ text: '✏️ ID ပြင်မည်', callback_data: 'buy:id', style: 'primary' }, { text: '🔄 Package', callback_data: 'buy:chg', style: 'primary' }]);
+  else kb.push([{ text: '🔄 Package', callback_data: 'buy:chg' }]);
+  kb.push(BUY_CANCEL_ROW);
+  const fb = rows.map((r) => `${r[0]}: ${r[1]}`).join('\n');
+  return sendRichChecked(env, chatId, blocks, { inline_keyboard: kb }, `💼 Wallet ဖြင့် ဝယ်ယူမည်\n\n${fb}`);
+}
+
+async function buyExecute(env, ctx, chatId, telegramId) {
+  const st = await getBuy(env, telegramId, ['buy_final']);
+  if (!st || st.stale) return sendTelegramMessage(env, chatId, '⌛ Session ကုန်သွားပါပြီ (သို့) ဝယ်ပြီးသားပါ။ 📦 My Orders ကြည့်ပါ။', MAIN_KEYBOARD);
+  const buy = st.buy;
+  const game = await loadBuyGame(env, buy.gameId);
+  const pkg = game && buyNumbered(game).find((p) => p.n === buy.idx);
+  if (!game || !pkg) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။ 🎮 Game List ကနေ ရွေးပါ။', MAIN_KEYBOARD);
+  await putBuy(env, telegramId, 'buy_busy', buy);
+  const need = buyNeeds(game);
+  const order = {
+    playerId: need.player ? buy.playerId : '', serverId: need.server ? buy.serverId : '',
+    serverRegion: game.serverName || '', game: game.name, itemAmount: pkg.amount, price: pkg.price, quantity: 1,
+    packageTab: buyTabLabel(pkg.tab),
+    ...(buy.name ? { inGameName: buy.name } : {}),
+    ...(game.g2bulkCode && pkg.g2bulk ? { g2bulkGameCode: game.g2bulkCode, g2bulkCatalogueName: pkg.g2bulk } : {}),
+    ...(game.jcplaysProduct && pkg.jcplays ? { jcplaysProduct: game.jcplaysProduct, jcplaysProductId: pkg.jcplays } : {}),
+    ...(pkg.voucherId ? { g2bulkVoucherProductId: pkg.voucherId } : {}),
+    ...(game.fazercardCategoryId && pkg.fazercardOfferId ? { fazercardCategoryId: game.fazercardCategoryId, fazercardOfferId: pkg.fazercardOfferId } : {}),
+    ...(game.fazercardGiftCategoryId && pkg.fazercardGiftCardId ? { fazercardGiftCategoryId: game.fazercardGiftCategoryId, fazercardGiftCardId: pkg.fazercardGiftCardId } : {}),
+  };
+  let data = null;
+  try {
+    const res = await fetch(`${COUPON_WORKER_URL}/bot-create-order`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ secret: await getAdminBroadcastSecret(env), telegramId, clientRequestId: buy.reqId, order }),
+    });
+    data = await res.json().catch(() => null);
+  } catch (e) { console.error('bot-create-order failed', e); }
+  if (!data) {
+    await putBuy(env, telegramId, 'buy_final', buy); // same reqId: a retry can never double-charge
+    return sendTelegramMessage(env, chatId, '⚠️ Network ပြဿနာ ဖြစ်ပါတယ်။ 📦 My Orders မှာ အရင်စစ်ပြီး မရှိမှ ✅ ဝယ်မည် ကို ပြန်နှိပ်ပါ။',
+      { inline_keyboard: [[{ text: '✅ ဝယ်မည်', callback_data: 'buy:go' }], BUY_CANCEL_ROW] });
+  }
+  if (data.ok) {
+    await clearBotSession(env, telegramId);
+    return sendTelegramMessage(env, chatId,
+      `✅ <b>Order တင်ပြီးပါပြီ</b>\n\n🔖 Order <code>${escapeHtml(data.orderId)}</code>\n📦 ${escapeHtml(pkg.amount)} — ${escapeHtml(mmk(pkg.price))}\n\n⏳ ဖြည့်ပြီးတာနဲ့ ဒီ Chat ထဲ အကြောင်းကြားပါမယ်။`, MAIN_KEYBOARD, 'HTML');
+  }
+  const code = data.code || '';
+  if (code === 'INSUFFICIENT_BALANCE') {
+    await putBuy(env, telegramId, 'buy_final', buy);
+    return sendTelegramMessage(env, chatId, '💼 Wallet လက်ကျန်ငွေ မလောက်ပါ။', { inline_keyboard: [[{ text: '➕ Top Up Wallet', callback_data: 'wallet:topup' }], BUY_CANCEL_ROW] });
+  }
+  if (code === 'ID_CHECK_FAILED') {
+    await putBuy(env, telegramId, 'buy_final', buy);
+    return sendTelegramMessage(env, chatId, `❌ ${data.error || 'ID မမှန်ပါ'}`, { inline_keyboard: [[{ text: '✏️ ID ပြင်မည်', callback_data: 'buy:id' }], BUY_CANCEL_ROW] });
+  }
+  if (code === 'IN_PROGRESS') {
+    await putBuy(env, telegramId, 'buy_final', buy);
+    return sendTelegramMessage(env, chatId, '⏳ ခုနက Order ကို လုပ်ဆောင်နေဆဲပါ။ ခဏနေ 📦 My Orders မှာ စစ်ကြည့်ပါ။');
+  }
+  await clearBotSession(env, telegramId);
+  const why = code === 'PRICE_CHANGED' ? '💱 ဈေးနှုန်း ပြောင်းသွားပါပြီ။ 🎮 Game List ကနေ ပြန်ရွေးပါ။' : `❌ ${data.error || 'Order မတင်နိုင်ပါ'}`;
+  return sendTelegramMessage(env, chatId, why, MAIN_KEYBOARD);
+}
+
+async function handleBuyCallback(env, cq, ctx) {
+  const chatId = cq.message && cq.message.chat && cq.message.chat.id;
+  const messageId = cq.message && cq.message.message_id;
+  const telegramId = String(cq.from.id);
+  const parts = (cq.data || '').split(':');
+  const kind = parts[1];
+  await answerCallbackQuery(env, cq.id);
+  if (!chatId || kind === 'noop') return;
+  if (kind === 'x') {
+    await clearBotSession(env, telegramId);
+    return sendTelegramMessage(env, chatId, t(await getLanguage(env, telegramId), 'cancelled'), MAIN_KEYBOARD);
+  }
+  if (kind === 'pick') return buyPickPackage(env, chatId, telegramId, parseInt(parts[2], 10) || 0, messageId);
+  const st = await getBuy(env, telegramId, ['buy_pick', 'buy_sure', 'buy_id', 'buy_final']);
+  if (!st || st.stale) return sendTelegramMessage(env, chatId, '⌛ Session ကုန်သွားပါပြီ။ 🎮 Game List ကနေ ပြန်စပါ။', MAIN_KEYBOARD);
+  if (kind === 'chg') {
+    const game = await loadBuyGame(env, st.buy.gameId);
+    if (!game) return sendTelegramMessage(env, chatId, '⚠️ ပြန်စပါ။', MAIN_KEYBOARD);
+    await putBuy(env, telegramId, 'buy_pick', { gameId: st.buy.gameId, back: st.buy.back || '' });
+    return renderBuyPriceList(env, chatId, null, game, st.buy.back);
+  }
+  if (kind === 'ok') {
+    if (!st.buy.idx) return sendTelegramMessage(env, chatId, '🔢 Package နံပါတ် အရင်ရွေးပါ။');
+    const game = await loadBuyGame(env, st.buy.gameId);
+    if (game && !buyNeeds(game).player) return buyShowFinal(env, chatId, telegramId, st.buy, game);
+    return buyAskId(env, chatId, telegramId, st);
+  }
+  if (kind === 'id') return buyAskId(env, chatId, telegramId, st);
+  if (kind === 'go') return buyExecute(env, ctx, chatId, telegramId);
 }
 
 // Reads the game list, keeping only the fields this flow needs (mirrors
@@ -2916,7 +3357,7 @@ async function handleInlineQuery(env, inlineQuery) {
 
 async function answerInlineQuery(env, inlineQueryId, results) {
   try {
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerInlineQuery`, {
+    await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerInlineQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inline_query_id: inlineQueryId, results, cache_time: 30, is_personal: true }),
@@ -2927,9 +3368,22 @@ async function answerInlineQuery(env, inlineQueryId, results) {
 }
 
 async function editTelegramMessage(env, chatId, messageId, text, replyMarkup, parseMode) {
+  const richMsg = textMessageToRich(text, replyMarkup, parseMode);
+  if (richMsg) {
+    try {
+      const rr = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, message_id: messageId, rich_message: richMsg }),
+      });
+      const rd = await rr.json().catch(() => ({}));
+      if (rr.ok && rd.ok) return;
+      if (/not modified/i.test((rd && rd.description) || '')) return;
+      console.error('in-bubble edit failed, using classic keyboard:', rr.status, rd && rd.description);
+    } catch (e) { console.error('in-bubble edit threw:', e); }
+  }
   try {
     const payload = prepareOutgoing({ chat_id: chatId, message_id: messageId }, text, replyMarkup, parseMode);
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+    await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2969,7 +3423,7 @@ async function answerCallbackQueryRaw(env, callbackQueryId, text) {
   try {
     const payload = { callback_query_id: callbackQueryId };
     if (text) payload.text = text;
-    await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+    await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3062,6 +3516,7 @@ async function getBotSession(env, telegramId) {
       warned: fsField(doc.fields, 'warned'),
       adminKey: fsField(doc.fields, 'adminKey'),
       adminLang: fsField(doc.fields, 'adminLang'),
+      buy: fsField(doc.fields, 'buy'),
     };
   } catch (e) {
     console.error('getBotSession failed:', e);
@@ -3400,10 +3855,111 @@ async function fsDeleteDoc(env, docPath) {
   await fetch(`${base}/${docPath}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
 }
 
+// ---------------------------------------------------------------------------
+// Buttons INSIDE the message (Bot API 10.3 rich message "buttons" blocks) instead of a keyboard that
+// hangs under the bubble. One "buttons" block = one row (1-8 buttons, same fields as an inline button).
+// Every send/edit below tries the in-bubble version first and falls back to the classic
+// text + reply_markup keyboard if Telegram refuses it, so a screen is never lost.
+// ---------------------------------------------------------------------------
+function richButtonBlocks(markup) {
+  if (!markup || !Array.isArray(markup.inline_keyboard)) return [];
+  const rm = applyButtonOverrides(markup);
+  const rows = rm && Array.isArray(rm.inline_keyboard) ? rm.inline_keyboard.filter((r) => r && r.length) : [];
+  return rows.map((row) => ({ type: 'buttons', align: 'center', buttons: row.slice(0, 8) }));
+}
+
+const RT_TAGS = { b: 'bold', strong: 'bold', i: 'italic', em: 'italic', u: 'underline', ins: 'underline', s: 'strikethrough', strike: 'strikethrough', del: 'strikethrough', code: 'code', pre: 'code' };
+function htmlDecode(s) {
+  return String(s).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
+// One line of Telegram-HTML (<b> <i> <u> <s> <code> <a href>) -> a RichText value.
+function htmlLineToRichText(line) {
+  const root = { children: [] };
+  const stack = [root];
+  const re = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s[^>]*)?)>|([^<]+|<)/g;
+  let m;
+  const wrap = (node) => {
+    const kids = node.children.filter((c) => c !== '');
+    if (!kids.length) return '';
+    const inner = kids.length === 1 ? kids[0] : kids;
+    if (node.tag === 'a') return node.href ? { type: 'url', text: inner, url: node.href } : inner;
+    const type = RT_TAGS[node.tag];
+    return type ? { type, text: inner } : inner;
+  };
+  while ((m = re.exec(line))) {
+    if (m[4] !== undefined) { stack[stack.length - 1].children.push(htmlDecode(m[4])); continue; }
+    const closing = m[1] === '/';
+    const tag = m[2].toLowerCase();
+    if (!closing) {
+      if (tag === 'br') { stack[stack.length - 1].children.push('\n'); continue; }
+      const href = /href\s*=\s*["']([^"']+)["']/i.exec(m[3] || '');
+      stack.push({ tag, href: href ? htmlDecode(href[1]) : '', children: [] });
+    } else {
+      const idx = stack.map((n) => n.tag).lastIndexOf(tag);
+      if (idx < 1) continue;
+      while (stack.length > idx) {
+        const node = stack.pop();
+        stack[stack.length - 1].children.push(wrap(node));
+      }
+    }
+  }
+  while (stack.length > 1) { const node = stack.pop(); stack[stack.length - 1].children.push(wrap(node)); }
+  const kids = root.children.filter((c) => c !== '');
+  if (!kids.length) return '';
+  return kids.length === 1 ? kids[0] : kids;
+}
+function linesToParagraphs(text, isHtml) {
+  return String(text).split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
+    const rt = isHtml ? htmlLineToRichText(l) : l;
+    return rt === '' ? null : { type: 'paragraph', text: rt };
+  }).filter(Boolean);
+}
+function textToRichBlocks(text, parseMode) {
+  const isHtml = isMarked(text) || parseMode === 'HTML';
+  const src = isMarked(text) ? unmark(text) : String(text || '');
+  if (!isHtml) return linesToParagraphs(src, false);
+  const blocks = [];
+  const re = /<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi;
+  let last = 0, m;
+  while ((m = re.exec(src))) {
+    blocks.push(...linesToParagraphs(src.slice(last, m.index), true));
+    const inner = linesToParagraphs(m[1], true);
+    if (inner.length) blocks.push({ type: 'blockquote', blocks: inner });
+    last = re.lastIndex;
+  }
+  blocks.push(...linesToParagraphs(src.slice(last), true));
+  return blocks;
+}
+// null = "leave this message alone" (no inline keyboard, or an admin panel screen).
+function textMessageToRich(text, replyMarkup, parseMode) {
+  if (!replyMarkup || !Array.isArray(replyMarkup.inline_keyboard)) return null;
+  const rows = replyMarkup.inline_keyboard;
+  if (!rows.some((r) => r && r.length)) return null;
+  if (rows.some((r) => (r || []).some((b) => String(b.callback_data || '').startsWith('adm:')))) return null;
+  let blocks;
+  try { blocks = textToRichBlocks(text, parseMode); } catch (e) { return null; }
+  if (!blocks.length) return null;
+  const btns = richButtonBlocks(replyMarkup);
+  if (!btns.length) return null;
+  return { blocks: [...blocks, ...btns] };
+}
+
 async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
+  const richMsg = textMessageToRich(text, replyMarkup, parseMode);
+  if (richMsg) {
+    try {
+      const rr = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendRichMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, rich_message: richMsg }),
+      });
+      const rd = await rr.json().catch(() => ({}));
+      if (rr.ok && rd.ok) return;
+      console.error('in-bubble send failed, using classic keyboard:', rr.status, rd && rd.description);
+    } catch (e) { console.error('in-bubble send threw:', e); }
+  }
   const payload = prepareOutgoing({ chat_id: chatId }, text, replyMarkup, parseMode);
   try {
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3423,7 +3979,7 @@ async function sendTelegramMessage(env, chatId, text, replyMarkup, parseMode) {
 async function sendTelegramMessageChecked(env, chatId, text, replyMarkup) {
   const payload = prepareOutgoing({ chat_id: chatId }, text, replyMarkup);
   try {
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3444,7 +4000,7 @@ async function sendTelegramMessageChecked(env, chatId, text, replyMarkup) {
 async function editTelegramMessageChecked(env, chatId, messageId, text, replyMarkup) {
   try {
     const payload = prepareOutgoing({ chat_id: chatId, message_id: messageId }, text, replyMarkup);
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -3484,13 +4040,21 @@ function richKeyValueTable(rows, note) {
 }
 async function sendRichChecked(env, chatId, blocks, replyMarkup, fallbackText) {
   try {
-    const payload = { chat_id: chatId, rich_message: { blocks } };
-    const rm = applyButtonOverrides(replyMarkup);
-    if (rm) payload.reply_markup = rm;
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendRichMessage`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
+    const btns = richButtonBlocks(replyMarkup);
+    const classic = () => {
+      const payload = { chat_id: chatId, rich_message: { blocks } };
+      const rm = applyButtonOverrides(replyMarkup);
+      if (rm) payload.reply_markup = rm;
+      return payload;
+    };
+    const send = async (payload) => {
+      const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendRichMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      return { res, data: await res.json().catch(() => ({})) };
+    };
+    let { res, data } = btns.length ? await send({ chat_id: chatId, rich_message: { blocks: [...blocks, ...btns] } }) : await send(classic());
+    if (!(res.ok && data.ok) && btns.length) { console.error('in-bubble rich send failed, using classic keyboard:', res.status, data && data.description); ({ res, data } = await send(classic())); }
     if (res.ok && data.ok) return { ok: true, messageId: data.result && data.result.message_id };
     console.error('sendRichMessage failed, using plain text:', res.status, data && data.description);
     if (data && data.error_code === 403) return { ok: false, blocked: true, status: 403 };
@@ -3501,13 +4065,23 @@ async function sendRichChecked(env, chatId, blocks, replyMarkup, fallbackText) {
 }
 async function editRichChecked(env, chatId, messageId, blocks, replyMarkup, fallbackText) {
   try {
-    const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
-    const rm = applyButtonOverrides(replyMarkup);
-    if (rm) payload.reply_markup = rm;
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
+    const btns = richButtonBlocks(replyMarkup);
+    const classic = () => {
+      const payload = { chat_id: chatId, message_id: messageId, rich_message: { blocks } };
+      const rm = applyButtonOverrides(replyMarkup);
+      if (rm) payload.reply_markup = rm;
+      return payload;
+    };
+    const send = async (payload) => {
+      const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      return { res, data: await res.json().catch(() => ({})) };
+    };
+    let { res, data } = btns.length ? await send({ chat_id: chatId, message_id: messageId, rich_message: { blocks: [...blocks, ...btns] } }) : await send(classic());
+    if (res.ok && data.ok) return { ok: true };
+    if (/not modified/i.test((data && data.description) || '')) return { ok: true, notModified: true };
+    if (btns.length) { console.error('in-bubble rich edit failed, using classic keyboard:', res.status, data && data.description); ({ res, data } = await send(classic())); }
     if (res.ok && data.ok) return { ok: true };
     if (/not modified/i.test((data && data.description) || '')) return { ok: true, notModified: true };
     console.error('editMessageText(rich) failed, using plain text:', res.status, data && data.description);
@@ -3540,7 +4114,7 @@ async function alertAdmin(env, label, err) {
   const attempts = 3;
   for (let i = 0; i < attempts; i++) {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: env.ADMIN_TELEGRAM_CHAT_ID, text }),
@@ -3911,7 +4485,7 @@ async function broadcastToUsers(env, recipients, text, replyMarkup) {
 async function sendBroadcastMessage(env, chatId, text, replyMarkup) {
   try {
     const payload = prepareOutgoing({ chat_id: chatId }, text, replyMarkup);
-    const res = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const res = await tgFetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
